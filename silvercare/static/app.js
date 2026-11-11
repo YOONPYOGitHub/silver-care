@@ -2,10 +2,20 @@
 
 const $ = (id) => document.getElementById(id);
 const state = {
-  history: [], busy: false, config: null, recorder: null, stream: null,
-  recordingTimer: null, discardRecording: false, audioURL: null, speaking: false, audioGeneration: 0,
-  recordingGeneration: 0, recordingPending: false,
+  history: [], busy: false, config: null, mode: "text", chat: null,
+  audioURL: null, speaking: false, audioGeneration: 0, audioRequest: null,
 };
+const voice = {
+  active: false, generation: 0, phase: "paused", context: null, output: null,
+  stream: null, recorder: null, input: null, analyser: null, timer: null,
+  permissionPending: false, request: null,
+};
+const VOICE_SAMPLE_MS = 100;
+const VOICE_SILENCE_MS = 3000;
+const VOICE_NO_INPUT_MS = 30000;
+const VOICE_MAX_MS = 120000;
+const VOICE_MAX_BYTES = 4 * 1024 * 1024;
+const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
 const initialMessages = $("messages").cloneNode(true);
 $("today").textContent = new Intl.DateTimeFormat("ko-KR", {
   month: "long", day: "numeric", weekday: "long",
@@ -17,14 +27,24 @@ function showError(message) {
 }
 
 async function api(path, options = {}) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timeout = setTimeout(abort, 120000);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) controller.abort();
   let response;
   try {
     response = await fetch(path, {
-      credentials: "same-origin", signal: AbortSignal.timeout(120000), ...options,
+      credentials: "same-origin", ...options, signal: controller.signal,
     });
   } catch (error) {
-    if (error.name === "TimeoutError") throw new Error("답변이 지연되고 있어요. 잠시 후 다시 시도해 주세요.");
+    if (options.signal?.aborted) throw error;
+    if (controller.signal.aborted) throw new Error("답변이 지연되고 있어요. 잠시 후 다시 시도해 주세요.");
     throw new Error("연결을 확인해 주세요. 서버에 접속하지 못했습니다.");
+  } finally {
+    clearTimeout(timeout);
+    // Keep request-scoped cancellation linked while callers await JSON or audio bodies.
+    if (!response) options.signal?.removeEventListener("abort", abort);
   }
   if (!response.ok) {
     const data = await response.json().catch(() => null);
@@ -62,11 +82,8 @@ function setBusy(value) {
   state.busy = value;
   $("send").disabled = value;
   $("message").disabled = value;
-  $("new-chat").disabled = value;
-  $("new-chat-mobile").disabled = value;
-  $("record").disabled = value || state.recordingPending || !$("stt-toggle").checked;
-  document.querySelectorAll("[data-prompt]").forEach((button) => { button.disabled = value; });
   $("chat-form").setAttribute("aria-busy", String(value));
+  updateVoiceControls();
 }
 
 function healthTopicCard(topic) {
@@ -246,6 +263,7 @@ function setActiveSection(href) {
 }
 
 function focusComposerUnlessBrowsing() {
+  if (state.mode === "voice") return;
   if (document.activeElement?.closest(".sidebar, .right-panel, #topics, dialog")) return;
   $("message").focus({ preventScroll: true });
 }
@@ -259,8 +277,8 @@ document.querySelectorAll(".section-nav .nav-item").forEach((link) => {
     history.replaceState(null, "", href);
     const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
     if (href === "#conversation") {
-      $("chat-form").scrollIntoView({ behavior, block: "nearest" });
-      if (!state.busy) $("message").focus({ preventScroll: true });
+      $(state.mode === "voice" ? "voice-panel" : "chat-form").scrollIntoView({ behavior, block: "nearest" });
+      if (!state.busy && state.mode === "text") $("message").focus({ preventScroll: true });
     } else {
       target.scrollIntoView({ behavior, block: "nearest" });
       const control = target.querySelector("button:not(:disabled), input:not(:disabled)");
@@ -282,40 +300,62 @@ setActiveSection(
   ["#topics", "#voice-settings"].includes(location.hash) ? location.hash : "#conversation"
 );
 
-async function sendMessage(text) {
+async function sendMessage(text, voiceToken = null) {
   if (state.busy || !text.trim()) return;
   if (!state.config) { showError("서비스 연결을 확인하고 있어요. 새로고침 후 다시 시도해 주세요."); return; }
-  if (state.recorder) stopRecording(true);
-  stopAudio();
-  showError("");
   const value = text.trim();
   if (value.length > 2000) { showError("메시지는 2,000자 이하로 적어 주세요."); return; }
+  if (voiceToken === null && state.mode === "voice" && voice.active) {
+    if (["permission", "transcribing", "thinking", "starting"].includes(voice.phase)) return;
+    cancelVoice("", false);
+    voice.active = true;
+    voiceToken = voice.generation;
+    $("voice-transcript").textContent = value;
+  }
+  if (voiceToken !== null && !voiceCurrent(voiceToken)) return;
+  stopAudio();
+  showError("");
+  if (voiceToken !== null) setVoicePhase("thinking", "말씀하신 내용에 답변을 준비하고 있어요.");
   setBusy(true);
   const userMessage = addMessage("user", value);
   $("message").value = "";
   $("message").style.height = "";
   const loading = $("loading-template").content.cloneNode(true);
   $("messages").append(loading);
+  const loadingMessage = $("messages").lastElementChild;
+  const chat = { controller: new AbortController(), userMessage, loadingMessage, voiceToken, value };
+  state.chat = chat;
   scrollMessageIntoView($("messages").lastElementChild);
+  let result;
   try {
-    const response = await api("/api/chat", jsonOptions({ message: value, history: state.history }));
-    const result = await response.json();
-    document.querySelector(".loading")?.remove();
+    const response = await api("/api/chat", {
+      ...jsonOptions({ message: value, history: state.history }), signal: chat.controller.signal,
+    });
+    result = await response.json();
+    if (state.chat !== chat || (voiceToken !== null && !voiceCurrent(voiceToken))) return;
+    loadingMessage.remove();
     const article = addMessage("assistant", result.answer, result);
     state.history.push({ role: "user", content: value }, {
       role: "assistant", content: result.answer.slice(0, 4000),
     });
     state.history = state.history.slice(-12);
     scrollMessageIntoView(article);
-    if ($("tts-toggle").checked) void speakText(result.answer);
   } catch (error) {
+    if (state.chat !== chat) return;
     userMessage.remove();
     $("message").value = value;
     showError(error.message);
+    if (voiceToken !== null) pauseVoice(`답변을 받지 못해 잠시 멈췄어요. ${error.message}`);
   } finally {
-    document.querySelector(".loading")?.remove();
-    setBusy(false);
-    focusComposerUnlessBrowsing();
+    loadingMessage.remove();
+    if (state.chat === chat) {
+      state.chat = null;
+      setBusy(false);
+      focusComposerUnlessBrowsing();
+    }
+  }
+  if (result && voiceToken !== null && voiceCurrent(voiceToken)) {
+    await speakVoiceAnswer(result, voiceToken);
   }
 }
 
@@ -339,24 +379,31 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 
 function stopAudio() {
   state.audioGeneration += 1;
+  state.audioRequest?.abort();
+  state.audioRequest = null;
+  state.speaking = false;
   $("audio").pause();
   $("audio").removeAttribute("src");
   $("audio").load();
   if (state.audioURL) URL.revokeObjectURL(state.audioURL);
   state.audioURL = null;
   $("audio-panel").hidden = true;
+  document.querySelectorAll(".speak-action").forEach((button) => { button.disabled = false; });
 }
 
 async function speakText(text) {
   if (state.speaking) return;
+  if (voice.active) pauseVoice("답변을 듣는 동안 마이크는 꺼져 있어요. 다시 말씀하시려면 대화 시작을 눌러 주세요.");
   stopAudio();
   const generation = state.audioGeneration;
+  const controller = new AbortController();
+  state.audioRequest = controller;
   state.speaking = true;
   document.querySelectorAll(".speak-action").forEach((button) => { button.disabled = true; });
   try {
-    const response = await api("/api/speech/synthesize", jsonOptions({
-      text: text.replace(/\[\d+\]/g, "").slice(0, 4000),
-    }));
+    const response = await api("/api/speech/synthesize", {
+      ...jsonOptions({ text: speechText(text) }), signal: controller.signal,
+    });
     if (generation !== state.audioGeneration) return;
     const blob = await response.blob();
     if (generation !== state.audioGeneration) return;
@@ -365,108 +412,344 @@ async function speakText(text) {
     $("audio-panel").hidden = false;
     try { await $("audio").play(); }
     catch { showError("음성이 준비됐어요. 재생 버튼을 눌러 들어 주세요."); }
-  } catch (error) { showError(error.message); }
+  } catch (error) { if (generation === state.audioGeneration) showError(error.message); }
   finally {
-    state.speaking = false;
-    document.querySelectorAll(".speak-action").forEach((button) => { button.disabled = false; });
+    if (generation === state.audioGeneration) {
+      state.audioRequest = null;
+      state.speaking = false;
+      document.querySelectorAll(".speak-action").forEach((button) => { button.disabled = false; });
+    }
   }
 }
 $("close-audio").addEventListener("click", stopAudio);
-$("tts-toggle").addEventListener("change", () => {
-  if (!$("tts-toggle").checked) stopAudio();
-});
 
-function stopRecording(discard = false) {
-  state.recordingGeneration += 1;
-  state.discardRecording = discard;
-  clearTimeout(state.recordingTimer);
-  if (state.recorder?.state === "recording") state.recorder.stop();
-  state.stream?.getTracks().forEach((track) => track.stop());
-  state.stream = null;
-  $("record").classList.remove("recording");
-  $("record").setAttribute("aria-label", "음성으로 입력하기");
-  $("composer-hint").textContent = "이름, 연락처, 주민등록번호는 적지 말아 주세요.";
+function speechText(text) {
+  return text.replace(/\[\d+\]/g, "").slice(0, 4000);
 }
 
-async function startRecording() {
-  if (state.recordingPending || state.busy || !$("stt-toggle").checked) return;
-  if (state.recorder?.state === "recording") { stopRecording(); return; }
-  if (!navigator.mediaDevices?.getUserMedia || !globalThis.MediaRecorder) {
-    showError("이 브라우저는 녹음을 지원하지 않아요. HTTPS 환경의 최신 Chrome 또는 Edge를 이용해 주세요.");
+function voiceType() {
+  if (!globalThis.MediaRecorder?.isTypeSupported) return null;
+  return ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"]
+    .find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+function voiceAvailable() {
+  return state.config?.voice_enabled && navigator.mediaDevices?.getUserMedia
+    && AudioContextClass && voiceType();
+}
+
+function voiceCurrent(token) {
+  return voice.active && state.mode === "voice" && token === voice.generation;
+}
+
+function updateVoiceControls() {
+  $("mode-voice").disabled = !voiceAvailable();
+  $("voice-start").disabled = !voiceAvailable() || state.busy || voice.permissionPending
+    || (voice.active && voice.phase !== "speaking" && voice.phase !== "preparing");
+  $("voice-finish").disabled = voice.phase !== "listening";
+  $("voice-pause").disabled = !voice.active;
+  document.querySelectorAll("[data-prompt]").forEach((button) => {
+    button.disabled = state.busy || (voice.active
+      && ["starting", "permission", "transcribing"].includes(voice.phase));
+  });
+}
+
+function setVoicePhase(phase, message) {
+  voice.phase = phase;
+  $("voice-status").textContent = message;
+  updateVoiceControls();
+}
+
+function releaseMicrophone() {
+  clearTimeout(voice.timer);
+  voice.timer = null;
+  voice.input?.disconnect();
+  voice.analyser?.disconnect();
+  voice.input = null;
+  voice.analyser = null;
+  voice.stream?.getTracks().forEach((track) => track.stop());
+  voice.stream = null;
+}
+
+function stopVoiceOutput() {
+  if (!voice.output) return;
+  voice.output.onended = null;
+  voice.output.stop();
+  voice.output.disconnect();
+  voice.output = null;
+}
+
+function cancelChat(voiceOnly = false) {
+  if (!state.chat || (voiceOnly && state.chat.voiceToken === null)) return;
+  const chat = state.chat;
+  state.chat = null;
+  chat.controller.abort();
+  chat.userMessage.remove();
+  chat.loadingMessage.remove();
+  $("message").value = chat.value;
+  setBusy(false);
+}
+
+function cancelVoice(message, closeContext = true) {
+  voice.generation += 1;
+  voice.active = false;
+  voice.request?.abort();
+  voice.request = null;
+  cancelChat(true);
+  const recorder = voice.recorder;
+  voice.recorder = null;
+  releaseMicrophone();
+  if (recorder?.state === "recording") recorder.stop();
+  stopVoiceOutput();
+  if (closeContext && voice.context) {
+    void voice.context.close().catch(() => {});
+    voice.context = null;
+  }
+  let notice = message || "음성 대화를 잠시 멈췄어요. 대화 시작을 누르면 다시 들을게요.";
+  if (voice.permissionPending) notice += " 열려 있는 마이크 허용 창을 먼저 닫거나 선택해 주세요.";
+  setVoicePhase("paused", notice);
+}
+
+function pauseVoice(message) {
+  cancelVoice(message);
+}
+
+function selectMode(mode) {
+  if (mode === "voice" && !voiceAvailable()) return;
+  if (mode === state.mode) {
+    if (mode === "voice" && !voice.active) void startVoice();
     return;
   }
-  showError("");
+  pauseVoice();
+  if (mode === "voice") cancelChat();
   stopAudio();
-  const generation = state.recordingGeneration;
+  state.mode = mode;
+  document.body.classList.toggle("voice-mode", mode === "voice");
+  $("mode-text").setAttribute("aria-pressed", String(mode === "text"));
+  $("mode-voice").setAttribute("aria-pressed", String(mode === "voice"));
+  $("voice-panel").hidden = mode !== "voice";
+  $("chat-form").hidden = mode === "voice";
+  $("composer-hint").hidden = mode === "voice";
+  $("mode-description").textContent = mode === "voice"
+    ? "말씀을 마치고 3초 쉬면 답변해요. 답변을 다 들은 뒤 다시 말씀해 주세요."
+    : "글로 적어 보내 주세요. 답변의 듣기 버튼으로 음성을 들을 수 있어요.";
+  if (mode === "voice") {
+    $("message").blur();
+    void startVoice();
+  } else {
+    focusComposerUnlessBrowsing();
+  }
+}
+
+async function startVoice() {
+  if (!voiceAvailable() || state.mode !== "voice" || document.hidden
+      || state.busy || voice.permissionPending) return;
+  if (voice.active && !["speaking", "preparing"].includes(voice.phase)) return;
+  cancelVoice("", false);
+  stopAudio();
+  voice.active = true;
+  const token = voice.generation;
+  setVoicePhase("starting", "마이크를 준비하고 있어요.");
+  showError("");
   try {
-    const type = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"]
-      .find((candidate) => MediaRecorder.isTypeSupported(candidate));
-    if (!type) throw new Error("이 브라우저의 녹음 형식은 지원하지 않아요. 최신 Chrome 또는 Edge를 이용해 주세요.");
-    state.recordingPending = true;
-    $("record").disabled = true;
+    // Resuming under this explicit click also unlocks subsequent iOS Web Audio replies.
+    voice.context ||= new AudioContextClass();
+    await voice.context.resume();
+    if (!voiceCurrent(token)) return;
+    if (voice.context.state !== "running") throw new Error("소리를 시작하지 못했어요. 대화 시작을 다시 눌러 주세요.");
+    await listenForTurn(token);
+  } catch (error) {
+    if (voiceCurrent(token)) failVoice(error);
+  }
+}
+
+function failVoice(error) {
+  const message = error.name === "NotAllowedError"
+    ? "마이크 사용이 허용되지 않았어요. 브라우저 사이트 설정에서 허용하거나 글로 대화해 주세요."
+    : error.message || "음성 연결에 문제가 생겼어요. 다시 시작하거나 글로 대화해 주세요.";
+  pauseVoice(`잠시 멈췄어요. ${message}`);
+  showError(message);
+}
+
+async function listenForTurn(token) {
+  if (!voiceCurrent(token) || state.busy || voice.permissionPending || voice.recorder) return;
+  setVoicePhase("permission", "마이크 사용을 확인하고 있어요.");
+  voice.permissionPending = true;
+  updateVoiceControls();
+  try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (generation !== state.recordingGeneration || !$("stt-toggle").checked || state.busy) {
+    if (!voiceCurrent(token)) {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
-    state.stream = stream;
-    state.discardRecording = false;
-    const recorder = new MediaRecorder(state.stream, { mimeType: type });
-    state.recorder = recorder;
+    voice.stream = stream;
+    const context = voice.context;
+    voice.analyser = context.createAnalyser();
+    voice.analyser.fftSize = 2048;
+    voice.input = context.createMediaStreamSource(stream);
+    voice.input.connect(voice.analyser);
+    const type = voiceType();
+    const recorder = new MediaRecorder(stream, { mimeType: type });
+    voice.recorder = recorder;
     const chunks = [];
-    recorder.addEventListener("dataavailable", (event) => { if (event.data.size) chunks.push(event.data); });
-    recorder.addEventListener("error", () => {
-      stopRecording(true);
-      showError("녹음 중 문제가 생겼어요. 마이크 연결을 확인해 주세요.");
-    });
-    recorder.addEventListener("stop", async () => {
-      state.recorder = null;
-      if (state.discardRecording) return;
-      const blob = new Blob(chunks, { type });
-      if (!blob.size || blob.size > 4 * 1024 * 1024) {
-        showError("녹음이 비어 있거나 너무 커요. 짧게 다시 말씀해 주세요.");
+    let bytes = 0;
+    recorder.addEventListener("dataavailable", (event) => {
+      if (!voiceCurrent(token) || voice.recorder !== recorder || !event.data.size) return;
+      if (bytes + event.data.size > VOICE_MAX_BYTES) {
+        failVoice(new Error("녹음이 4MB를 넘어서 전송하지 않았어요. 더 짧게 말씀하거나 글로 적어 주세요."));
         return;
       }
-      const form = new FormData();
-      form.append("audio", blob, "recording");
-      setBusy(true);
-      try {
-        const response = await api("/api/speech/transcribe", { method: "POST", body: form });
-        const data = await response.json();
-        $("message").value = data.text.slice(0, 2000);
-        $("message").dispatchEvent(new Event("input"));
-        $("composer-hint").textContent = "인식된 내용을 확인한 뒤 보내기 버튼을 눌러 주세요.";
-      } catch (error) { showError(error.message); }
-      finally { setBusy(false); focusComposerUnlessBrowsing(); }
+      bytes += event.data.size;
+      chunks.push(event.data);
     });
-    recorder.start();
-    $("record").classList.add("recording");
-    $("record").setAttribute("aria-label", "녹음 중지하고 음성 인식하기");
-    $("composer-hint").textContent = "듣고 있어요. 마이크를 다시 누르면 완료돼요. (최대 45초)";
-    state.recordingTimer = setTimeout(() => stopRecording(), 45000);
+    recorder.addEventListener("error", () => {
+      if (voiceCurrent(token)) failVoice(new Error("녹음 중 문제가 생겼어요. 마이크 연결을 확인해 주세요."));
+    });
+    recorder.addEventListener("stop", () => {
+      if (voice.recorder !== recorder) return;
+      voice.recorder = null;
+      if (voiceCurrent(token) && voice.phase === "transcribing") {
+        void transcribeTurn(new Blob(chunks, { type }), token);
+      } else if (voiceCurrent(token)) {
+        failVoice(new Error("마이크 녹음이 중단됐어요. 대화 시작을 다시 눌러 주세요."));
+      }
+    });
+    recorder.start(1000);
+    setVoicePhase("listening", "듣고 있어요. 말씀을 마치고 3초 쉬거나 말씀 완료를 눌러 주세요.");
+    const samples = new Float32Array(voice.analyser.fftSize);
+    const started = Date.now();
+    let speechMs = 0;
+    let heardSpeech = false;
+    let lastSpeech = started;
+    const sample = () => {
+      if (!voiceCurrent(token) || voice.phase !== "listening") return;
+      voice.analyser.getFloatTimeDomainData(samples);
+      const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+      const now = Date.now();
+      if (rms >= 0.018) {
+        speechMs += VOICE_SAMPLE_MS;
+        if (speechMs >= 300) heardSpeech = true;
+        if (heardSpeech) lastSpeech = now;
+      } else if (!heardSpeech) speechMs = 0;
+      if (now - started >= VOICE_MAX_MS) {
+        $("voice-caption").textContent = "한 번의 녹음은 최대 2분이에요. 지금까지 말씀하신 내용에 답한 뒤 다시 들을게요.";
+        finishVoiceTurn();
+      } else if (!heardSpeech && now - started >= VOICE_NO_INPUT_MS) {
+        pauseVoice("30초 동안 말씀이 없어 잠시 멈췄어요. 준비되시면 대화 시작을 눌러 주세요.");
+      } else if (heardSpeech && now - lastSpeech >= VOICE_SILENCE_MS) {
+        finishVoiceTurn();
+      } else {
+        voice.timer = setTimeout(sample, VOICE_SAMPLE_MS);
+      }
+    };
+    voice.timer = setTimeout(sample, VOICE_SAMPLE_MS);
   } catch (error) {
-    state.stream?.getTracks().forEach((track) => track.stop());
-    state.stream = null;
-    if (generation !== state.recordingGeneration) return;
-    showError(error.name === "NotAllowedError" ? "마이크 사용을 허용해 주세요. 브라우저의 사이트 설정에서 바꿀 수 있어요." : error.message);
+    if (voiceCurrent(token)) failVoice(error);
   } finally {
-    state.recordingPending = false;
-    $("record").disabled = state.busy || !$("stt-toggle").checked;
+    voice.permissionPending = false;
+    updateVoiceControls();
   }
 }
-$("record").addEventListener("click", () => { void startRecording(); });
-$("stt-toggle").addEventListener("change", () => {
-  $("record").disabled = !$("stt-toggle").checked || state.busy || state.recordingPending;
-  $("record").title = $("stt-toggle").checked ? "눌러서 녹음 시작 · 다시 눌러서 완료" : "설정에서 음성 입력을 켜 주세요";
-  if (!$("stt-toggle").checked) stopRecording(true);
-});
+
+function finishVoiceTurn() {
+  if (!voice.active || voice.phase !== "listening") return;
+  setVoicePhase("transcribing", "마이크를 끄고 말씀하신 내용을 확인하고 있어요.");
+  releaseMicrophone();
+  if (voice.recorder?.state === "recording") voice.recorder.stop();
+}
+
+async function voiceJSON(path, options) {
+  const controller = new AbortController();
+  voice.request = controller;
+  try {
+    const response = await api(path, { ...options, signal: controller.signal });
+    return await response.json();
+  } finally {
+    if (voice.request === controller) voice.request = null;
+  }
+}
+
+async function transcribeTurn(blob, token) {
+  try {
+    if (!blob.size || blob.size > VOICE_MAX_BYTES) {
+      throw new Error("녹음이 비어 있거나 너무 커요. 다시 말씀하거나 글로 적어 주세요.");
+    }
+    const form = new FormData();
+    form.append("audio", blob, "recording");
+    const data = await voiceJSON("/api/speech/transcribe", { method: "POST", body: form });
+    if (!voiceCurrent(token)) return;
+    if (typeof data.text !== "string" || !data.text.trim()) {
+      throw new Error("말씀을 알아듣지 못했어요. 다시 시작하거나 글로 적어 주세요.");
+    }
+    const text = data.text.trim();
+    $("voice-transcript").textContent = text;
+    if (text.length > 2000) {
+      $("message").value = text;
+      throw new Error("인식된 말씀이 2,000자를 넘었어요. 내용을 자르지 않았으니 글로 전환해 고쳐 보내 주세요.");
+    }
+    await sendMessage(text, token);
+  } catch (error) {
+    if (voiceCurrent(token)) failVoice(error);
+  }
+}
+
+async function speakVoiceAnswer(result, token) {
+  $("voice-caption").textContent = result.answer;
+  setVoicePhase("preparing", "답변을 소리로 준비하고 있어요. 마이크는 꺼져 있어요.");
+  const controller = new AbortController();
+  voice.request = controller;
+  try {
+    const response = await api("/api/speech/synthesize", {
+      ...jsonOptions({ text: speechText(result.answer) }), signal: controller.signal,
+    });
+    if (!voiceCurrent(token)) return;
+    const blob = await response.blob();
+    if (!voiceCurrent(token)) return;
+    const data = await blob.arrayBuffer();
+    if (!voiceCurrent(token)) return;
+    const context = voice.context;
+    const buffer = await context.decodeAudioData(data);
+    if (!voiceCurrent(token) || voice.context !== context) return;
+    if (context.state !== "running") throw new Error("소리가 일시 중지됐어요. 대화 시작을 다시 눌러 주세요.");
+    const output = context.createBufferSource();
+    output.buffer = buffer;
+    output.connect(context.destination);
+    voice.output = output;
+    output.onended = () => {
+      if (!voiceCurrent(token) || voice.output !== output) return;
+      output.disconnect();
+      voice.output = null;
+      if (result.mode === "emergency") {
+        pauseVoice("안전을 위해 자동 대화를 멈췄어요. 위 안내를 확인하고 필요한 경우 119에 연락해 주세요.");
+      } else {
+        void listenForTurn(token);
+      }
+    };
+    setVoicePhase("speaking", "답변을 들려드리고 있어요. 지금 말씀하려면 대화 시작을 눌러 주세요.");
+    output.start();
+  } catch (error) {
+    if (voiceCurrent(token)) failVoice(new Error(`답변 글은 남아 있어요. 음성 재생을 멈췄어요. ${error.message}`));
+  } finally {
+    if (voice.request === controller) voice.request = null;
+  }
+}
+
+$("mode-voice").disabled = true;
+$("mode-text").addEventListener("click", () => selectMode("text"));
+$("mode-voice").addEventListener("click", () => selectMode("voice"));
+$("voice-to-text").addEventListener("click", () => selectMode("text"));
+$("voice-start").addEventListener("click", () => { void startVoice(); });
+$("voice-finish").addEventListener("click", finishVoiceTurn);
+$("voice-pause").addEventListener("click", () => pauseVoice());
 $("new-chat").addEventListener("click", () => {
-  if (state.busy) return;
   stopAudio();
-  stopRecording(true);
+  pauseVoice("새 대화를 시작했어요. 대화 시작을 누르면 들을게요.");
+  cancelChat();
   state.history = [];
   $("messages").replaceChildren(...initialMessages.cloneNode(true).childNodes);
   $("message").value = "";
+  $("voice-transcript").textContent = "";
+  $("voice-caption").textContent = "";
   showError("");
   setActiveSection("#conversation");
   history.replaceState(null, "", location.pathname + location.search);
@@ -482,7 +765,12 @@ for (const size of ["normal", "large"]) {
   });
 }
 
-addEventListener("pagehide", () => { stopRecording(true); stopAudio(); });
+function suspendAudio() {
+  pauseVoice("화면을 벗어나 음성 대화를 멈췄어요. 대화 시작을 눌러 다시 이어가 주세요.");
+  stopAudio();
+}
+addEventListener("pagehide", suspendAudio);
+document.addEventListener("visibilitychange", () => { if (document.hidden) suspendAudio(); });
 $("new-chat-mobile").addEventListener("click", () => $("new-chat").click());
 function bindDialog(openId, closeId, dialogId, openOnClick = true) {
   const dialog = $(dialogId);
@@ -540,10 +828,10 @@ async function initialize() {
   try {
     state.config = await (await api("/api/config")).json();
     $("status").lastChild.textContent = state.config.search_enabled ? "상담 준비 완료" : "일반 대화 모드";
-    $("stt-toggle").disabled = !state.config.voice_enabled;
-    $("tts-toggle").disabled = !state.config.voice_enabled;
-    if (!state.config.voice_enabled) {
-      document.querySelector(".voice-privacy span").textContent = "음성 서비스가 아직 설정되지 않았어요. 텍스트로 대화해 주세요.";
+    updateVoiceControls();
+    if (!voiceAvailable()) {
+      $("mode-description").textContent = "이 환경에서는 음성 대화를 사용할 수 없어요. 글로 대화해 주세요.";
+      $("mode-voice").title = "음성 서비스 설정, HTTPS 마이크, 녹음과 Web Audio 지원이 필요해요.";
     }
     await initializeHealthLibrary();
   } catch (error) {

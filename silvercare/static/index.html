@@ -62,6 +62,14 @@
             <img class="hero-art" src="/static/together.svg" alt="따뜻한 햇살 아래 함께 앉아 쉬는 두 사람과 식물" width="330" height="310">
           </section>
 
+          <section class="conversation-mode" aria-label="대화 방식">
+            <div class="mode-buttons" role="group" aria-label="대화 방식 선택">
+              <button type="button" id="mode-text" aria-pressed="true"><svg aria-hidden="true"><use href="#i-chat"/></svg>글로 대화</button>
+              <button type="button" id="mode-voice" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#i-mic"/></svg>말로 대화</button>
+            </div>
+            <p id="mode-description">글을 입력하고 보내기를 눌러 주세요. 대화 중에도 방식을 바꿀 수 있어요.</p>
+          </section>
+
           <section id="topics" class="topics" aria-labelledby="topics-title">
             <div class="section-heading"><h2 id="topics-title">어떤 이야기를 나눠볼까요?</h2><span>편하게 골라보세요</span></div>
             <div class="topic-grid">
@@ -103,10 +111,24 @@
           <div id="audio-panel" class="audio-panel" hidden><span>온담의 답변 듣기</span><audio id="audio" controls preload="none"></audio><button id="close-audio" class="text-button" aria-label="음성 재생 닫기">닫기</button></div>
           <div class="composer-wrap">
             <div class="composer-hint" id="composer-hint"><svg><use href="#i-shield"/></svg>이름, 연락처, 주민등록번호는 적지 말아 주세요.</div>
+            <section id="voice-panel" class="voice-panel" aria-label="음성 대화" hidden>
+              <div class="voice-orb" aria-hidden="true"><svg><use href="#i-mic"/></svg></div>
+              <h2>온담과 말로 이야기해요</h2>
+              <p id="voice-status" class="voice-status" role="status" aria-live="polite">음성 대화를 준비하고 있어요.</p>
+              <p id="voice-transcript" class="voice-transcript" aria-live="polite"></p>
+              <p id="voice-caption" class="voice-caption">말을 마치면 답변을 읽어드리고, 다음 말씀을 들을게요.</p>
+              <div class="voice-controls">
+                <button type="button" id="voice-start">대화 시작</button>
+                <button type="button" id="voice-finish" disabled>말 마침</button>
+                <button type="button" id="voice-pause" disabled>잠시 멈춤</button>
+              </div>
+              <button type="button" id="voice-to-text" class="voice-text-switch">글로 전환·수정하기</button>
+              <p class="voice-session-note">말을 마치고 3초 정도 쉬면 자동으로 보내요. 먼저 보내려면 ‘말 마침’을 눌러 주세요. 한 번 녹음은 최대 2분이며 대화 전체 시간 제한은 아니에요.</p>
+            </section>
             <form id="chat-form" class="composer">
               <label class="sr-only" for="message">온담에게 보낼 메시지</label>
               <textarea id="message" rows="1" maxlength="2000" placeholder="지금 어떤 도움이 필요하신가요?" aria-describedby="composer-help"></textarea>
-              <div class="composer-actions"><button type="button" class="mic-button" id="record" aria-label="음성으로 입력하기" title="설정에서 음성 입력을 켜 주세요" disabled><svg><use href="#i-mic"/></svg></button><button type="submit" class="send-button" id="send" aria-label="메시지 보내기"><svg><use href="#i-arrow"/></svg></button></div>
+              <div class="composer-actions"><button type="submit" class="send-button" id="send" aria-label="메시지 보내기"><svg><use href="#i-arrow"/></svg></button></div>
             </form>
             <div class="composer-footer" id="composer-help">
               <p class="ai-disclaimer">온담은 AI로, 답변에 오류나 오래된 정보가 있을 수 있어요.<br>건강 정보는 참고용이며, 진단·복약 변경·검사 결정은 의료진과 상의해 주세요.<br><button type="button" id="open-info" class="info-link" aria-haspopup="dialog" aria-controls="info-dialog">정보·개인정보 안내</button></p>
@@ -118,10 +140,8 @@
         <aside class="right-panel" aria-label="대화 설정과 도움말">
           <section class="settings-card" id="voice-settings" aria-labelledby="settings-title">
             <div class="panel-heading"><span class="panel-icon"><svg><use href="#i-speaker"/></svg></span><h2 id="settings-title">더 편안한 대화</h2></div>
-            <p class="panel-description">나에게 맞는 방법으로 이야기해요.</p>
-            <label class="setting-row"><span><strong>말로 입력하기</strong><small>마이크로 편하게 이야기해요</small></span><input id="stt-toggle" type="checkbox" role="switch" disabled><span class="switch" aria-hidden="true"></span></label>
-            <label class="setting-row"><span><strong>답변 읽어주기</strong><small>답변을 편안한 목소리로 들어요</small></span><input id="tts-toggle" type="checkbox" role="switch" disabled><span class="switch" aria-hidden="true"></span></label>
-            <div class="voice-privacy"><svg><use href="#i-shield"/></svg><span>켰을 때만 음성을 처리해요.<br>녹음은 최대 45초, 상담 이력으로 보관하지 않아요.</span></div>
+            <p class="panel-description">‘글로 대화’ 또는 ‘말로 대화’를 골라 주세요. 대화 내용은 함께 이어져요.</p>
+            <div class="voice-privacy"><svg><use href="#i-shield"/></svg><span>음성 모드에서만 마이크를 사용해요.<br>멈춤·텍스트 전환 시 녹음을 중단해요. 음성을 상담 이력으로 보관하지 않아요.</span></div>
             <div class="font-setting"><span>글자 크기</span><div role="group" aria-label="글자 크기 선택"><button id="font-normal" class="selected" aria-pressed="true">가<span class="sr-only"> 기본 크기</span></button><button id="font-large" aria-pressed="false">가<span class="sr-only"> 큰 크기</span></button></div></div>
           </section>
 
@@ -155,7 +175,7 @@
       <section><h3>AI 답변과 출처</h3><p>온담은 생활 돌봄 정보를 돕는 AI이며 의료진을 대신하지 않아요. 공개 데이터와 공식 기관의 자료를 참고하더라도, 원자료의 한계나 정제·검색·답변 생성 과정에서 오류가 생길 수 있어요. 출처 표시는 정확성이나 최신성을 보장하지 않아요.</p><p>진단, 약의 복용량 변경·중단, 검사 필요성 등 개인별 판단은 의사·약사 등 의료전문가와 상의해 주세요. 응급 상황에는 채팅을 기다리지 말고 직접 119에 전화해 주세요. 온담은 신고하거나 위치를 전송하지 않아요.</p></section>
       <section><h3>질문과 대화의 처리</h3><p>답변을 만들기 위해 질문과 최근 대화가 외부 AI 응답·자료 검색 서비스로 전송돼요. 일부 개인정보 패턴을 가리지만 완전한 익명화를 보장하지는 않아요. 이름, 연락처, 상세 주소, 주민등록번호는 입력하지 말아 주세요.</p><p>대화 이력은 현재 브라우저 메모리에서 유지되며 새로고침이나 새로운 대화로 지울 수 있어요. 앱 서버는 대화·녹음을 상담 이력으로 보관하지 않아요. 요청 처리에는 메모리나 임시 파일이 사용될 수 있어요. 외부 처리 서비스의 데이터 처리·보존 정책은 별도로 적용돼요.</p></section>
       <section><h3>공식 건강정보와 답변</h3><p>건강 질문에 관련된 질병관리청 자료를 콘텐츠 번호로 조회해 기존 참고자료와 함께 AI 답변의 근거로 사용해요. 질문이나 대화 이력은 이 요청에 포함하지 않아요. 관련 본문 발췌는 답변 생성을 위해 외부 AI 응답 서비스로 전송돼요.</p><p>답변의 출처 링크와 별도의 원문 보기에서 자료를 확인할 수 있어요. 원문 보기의 텍스트는 AI가 재작성한 답변이 아니에요. 같은 자료의 반복 요청을 줄이기 위해 서버 메모리에 최대 1시간 보관할 수 있어요. 표·그림·영상과 전체 내용은 원문 링크에서 확인해 주세요. 자료의 출처와 이용조건은 각 항목에 표시해요.</p></section>
-      <section><h3>선택형 음성</h3><p>말로 입력하기를 켜고 녹음하면 해당 음성이 외부 음성 인식 서비스로 전송돼요. 녹음은 최대 45초이며 인식된 내용을 확인한 뒤 직접 보낼 수 있어요. 답변 듣기를 사용하면 답변 텍스트를 외부 음성 합성 서비스로 보내 음성을 만들어요.</p><p>별도의 가입이나 접속 코드 없이 이용할 수 있어요. 대화는 현재 화면에서만 유지되므로 공용 기기에서는 이용을 마친 뒤 새로고침해 주세요.</p></section>
+      <section><h3>텍스트와 음성 대화</h3><p>‘말로 대화’를 선택하면 마이크 권한을 요청하고, 말끝을 감지하거나 ‘말 마침’을 누르면 음성을 외부 음성 인식 서비스로 보내요. 인식된 질문은 자동 전송되며, 답변을 읽은 뒤 다음 말씀을 들어요. 답변을 읽는 동안은 녹음하지 않아요.</p><p>인식된 말과 답변은 화면에도 표시돼요. 약 이름·숫자 등 중요한 내용이 맞는지 확인해 주세요. 잘못 인식했거나 잠시 쉬려면 ‘잠시 멈춤’ 또는 ‘글로 전환·수정하기’를 이용해 주세요. 두 방식은 같은 대화 이력을 사용해요.</p><p>한 번 녹음은 최대 2분·4MB이며, 말씀이 없는 시간이 길면 대화를 일시정지해요. ‘잠시 멈춤’, 텍스트 전환, 화면을 벗어날 때 녹음을 중단해요. 음성은 상담 이력으로 보관하지 않아요. 답변 듣기는 답변 텍스트를 외부 음성 합성 서비스로 보내요.</p><p>별도의 가입이나 접속 코드 없이 이용할 수 있어요. 대화는 현재 화면에서만 유지되므로 공용 기기에서는 이용을 마친 뒤 새로고침해 주세요.</p></section>
     </div>
   </dialog>
   <template id="loading-template"><article class="message assistant loading"><img class="avatar" src="/static/mark.svg" alt="" width="36" height="36"><div class="message-body"><div class="message-name">온담</div><div class="bubble thinking" role="status"><span></span><span></span><span></span><small>마음을 담아 답변을 준비하고 있어요</small></div></div></article></template>

@@ -31,7 +31,16 @@ def test_ui_and_headers(config, services):
         response = client.get("/")
         assert response.status_code == 200
         assert "오늘도," in response.text
-        assert 'id="stt-toggle"' in response.text
+        assert 'id="mode-text"' in response.text
+        assert 'id="mode-voice"' in response.text
+        assert 'id="voice-panel"' in response.text
+        assert 'id="voice-finish"' in response.text
+        assert 'id="voice-pause"' in response.text
+        assert 'id="stt-toggle"' not in response.text
+        assert 'id="tts-toggle"' not in response.text
+        assert 'id="record"' not in response.text
+        assert "최대 45초" not in response.text
+        assert "한 번 녹음은 최대 2분" in response.text
         assert 'id="info-dialog"' in response.text
         assert 'id="open-info"' in response.text
         assert 'class="family-examples"' in response.text
