@@ -599,14 +599,14 @@ async function listenForTurn(token) {
     recorder.addEventListener("dataavailable", (event) => {
       if (!voiceCurrent(token) || voice.recorder !== recorder || !event.data.size) return;
       if (bytes + event.data.size > VOICE_MAX_BYTES) {
-        failVoice(new Error("녹음이 4MB를 넘어서 전송하지 않았어요. 더 짧게 말씀하거나 글로 적어 주세요."));
+        failVoice(new Error("음성 크기가 처리 한도(4MB)를 넘어 전송하지 않았어요. 나누어 말씀하거나 글로 적어 주세요."));
         return;
       }
       bytes += event.data.size;
       chunks.push(event.data);
     });
     recorder.addEventListener("error", () => {
-      if (voiceCurrent(token)) failVoice(new Error("녹음 중 문제가 생겼어요. 마이크 연결을 확인해 주세요."));
+      if (voiceCurrent(token)) failVoice(new Error("말씀을 듣는 중 문제가 생겼어요. 마이크 연결을 확인해 주세요."));
     });
     recorder.addEventListener("stop", () => {
       if (voice.recorder !== recorder) return;
@@ -614,7 +614,7 @@ async function listenForTurn(token) {
       if (voiceCurrent(token) && voice.phase === "transcribing") {
         void transcribeTurn(new Blob(chunks, { type }), token);
       } else if (voiceCurrent(token)) {
-        failVoice(new Error("마이크 녹음이 중단됐어요. 대화 시작을 다시 눌러 주세요."));
+        failVoice(new Error("마이크 연결이 중단됐어요. 대화 시작을 다시 눌러 주세요."));
       }
     });
     recorder.start(1000);
@@ -635,7 +635,7 @@ async function listenForTurn(token) {
         if (heardSpeech) lastSpeech = now;
       } else if (!heardSpeech) speechMs = 0;
       if (now - started >= VOICE_MAX_MS) {
-        $("voice-caption").textContent = "한 번의 녹음은 최대 2분이에요. 지금까지 말씀하신 내용에 답한 뒤 다시 들을게요.";
+        $("voice-caption").textContent = "한 번에 최대 2분까지 말씀하실 수 있어요. 지금까지 말씀하신 내용에 답한 뒤 다시 들을게요.";
         finishVoiceTurn();
       } else if (!heardSpeech && now - started >= VOICE_NO_INPUT_MS) {
         pauseVoice("30초 동안 말씀이 없어 잠시 멈췄어요. 준비되시면 대화 시작을 눌러 주세요.");
@@ -675,7 +675,7 @@ async function voiceJSON(path, options) {
 async function transcribeTurn(blob, token) {
   try {
     if (!blob.size || blob.size > VOICE_MAX_BYTES) {
-      throw new Error("녹음이 비어 있거나 너무 커요. 다시 말씀하거나 글로 적어 주세요.");
+      throw new Error("말씀하신 음성을 처리하지 못했어요. 다시 말씀하거나 글로 적어 주세요.");
     }
     const form = new FormData();
     form.append("audio", blob, "recording");
@@ -834,7 +834,7 @@ async function initialize() {
     updateVoiceControls();
     if (!voiceAvailable()) {
       $("mode-description").textContent = "이 환경에서는 음성 대화를 사용할 수 없어요. 글로 대화해 주세요.";
-      $("mode-voice").title = "음성 서비스 설정, HTTPS 마이크, 녹음과 Web Audio 지원이 필요해요.";
+      $("mode-voice").title = "마이크와 음성 재생을 지원하는 브라우저에서 이용해 주세요.";
     }
     await initializeHealthLibrary();
   } catch (error) {

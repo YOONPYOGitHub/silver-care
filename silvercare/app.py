@@ -160,7 +160,7 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
         message = f"{names.get(exc.service, '연결')} 서비스 연결에 문제가 있습니다."
         if exc.service == "speech" and exc.status == 422:
             return JSONResponse(
-                {"detail": "말씀을 인식하지 못했어요. 조용한 곳에서 다시 녹음해 주세요."}, 422
+                {"detail": "말씀을 잘 듣지 못했어요. 다시 한 번 말씀해 주세요."}, 422
             )
         return JSONResponse({"detail": message + " 잠시 후 다시 시도해 주세요."}, 503)
 
@@ -242,13 +242,13 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
     async def transcribe(request: Request, audio: Annotated[UploadFile, File()]) -> dict[str, str]:
         content_type = (audio.content_type or "").split(";")[0]
         if content_type not in {"audio/webm", "audio/ogg", "audio/wav", "audio/mp4"}:
-            raise HTTPException(415, "지원하지 않는 녹음 형식입니다.")
+            raise HTTPException(415, "지원하지 않는 음성 형식입니다.")
         content = await audio.read(AUDIO_LIMIT + 1)
         await audio.close()
         if not content:
-            raise HTTPException(422, "녹음된 음성이 없습니다.")
+            raise HTTPException(422, "말씀이 들리지 않았어요. 다시 한 번 말씀해 주세요.")
         if len(content) > AUDIO_LIMIT:
-            raise HTTPException(413, "음성은 4MB 이하로 녹음해 주세요.")
+            raise HTTPException(413, "음성 크기가 처리 한도(4MB)를 넘었어요. 나누어 말씀해 주세요.")
         text = await request.app.state.azure.transcribe(content, content_type)
         return {"text": text}
 

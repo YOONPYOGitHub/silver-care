@@ -40,7 +40,13 @@ def test_ui_and_headers(config, services):
         assert 'id="tts-toggle"' not in response.text
         assert 'id="record"' not in response.text
         assert "최대 45초" not in response.text
-        assert "한 번 녹음은 최대 2분" in response.text
+        assert "한 번에 최대 2분까지 말씀하실 수" in response.text
+        assert "녹음" not in response.text
+        assert "마이크 입력을 일시적으로 수집" in response.text
+        settings_panel = response.text.split('id="voice-settings"', 1)[1].split("</section>", 1)[0]
+        assert "글자 크기를 편하게 조절해 보세요." in settings_panel
+        assert "글과 음성은 앱 서버에 상담 이력으로 저장하지 않아요." in settings_panel
+        assert "음성 모드에서만 마이크를 사용해요." not in settings_panel
         assert 'id="info-dialog"' in response.text
         assert 'id="open-info"' in response.text
         assert 'class="family-examples"' in response.text
@@ -165,6 +171,17 @@ def test_upstream_error_is_explicit(config, services):
         response = client.post("/api/chat", json={"message": "도움"})
         assert response.status_code == 503
         assert "자료 검색" in response.json()["detail"]
+
+
+def test_unrecognized_speech_uses_conversation_language(config, services):
+    services.transcribe.side_effect = UpstreamError("speech", 422)
+    with TestClient(create_app(config, services)) as client:
+        response = client.post(
+            "/api/speech/transcribe", files={"audio": ("speech.webm", b"test", "audio/webm")}
+        )
+        assert response.status_code == 422
+        assert response.json() == {"detail": "말씀을 잘 듣지 못했어요. 다시 한 번 말씀해 주세요."}
+        assert "녹음" not in response.text
 
 
 def test_rate_limiter_is_bounded():
