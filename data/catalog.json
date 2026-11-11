@@ -1,0 +1,43 @@
+{
+  "sources": [
+    {
+      "name": "medical-guidelines",
+      "dataset_id": "71874",
+      "file_key": "556339",
+      "purpose": "knowledge",
+      "raw_path": "data/raw/aihub/71874/file-556339.tar",
+      "manifest_path": "data/manifests/aihub-71874-source.json",
+      "prepared_path": "data/processed/aihub-71874-source.jsonl"
+    },
+    {
+      "name": "medical-online",
+      "dataset_id": "71875",
+      "file_key": "556377",
+      "purpose": "knowledge",
+      "raw_path": "data/raw/aihub/71875/file-556377.tar",
+      "manifest_path": "data/manifests/aihub-71875-source.json",
+      "prepared_path": "data/processed/aihub-71875-source.jsonl"
+    },
+    {
+      "name": "prevention-training-qa",
+      "dataset_id": "71874",
+      "file_key": "556353",
+      "purpose": "qa",
+      "raw_path": "data/raw/aihub/71874/file-556353.tar"
+    },
+    {
+      "name": "internal-medicine-validation",
+      "dataset_id": "71875",
+      "file_key": "556388",
+      "purpose": "qa",
+      "raw_path": "data/raw/aihub/71875/file-556388.tar"
+    },
+    {
+      "name": "emotion-validation",
+      "dataset_id": "86",
+      "file_key": "66048",
+      "purpose": "dialogue",
+      "raw_path": "data/raw/aihub/86/validation-66048.tar"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "dataset_id": "aihub-71875-online",
+  "title": "AI Hub 필수의료 의학지식: 국문 온라인 의료정보",
+  "source_url": "https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71875",
+  "evidence_kind": "dataset_knowledge",
+  "source_schema": "medical_source",
+  "source_file_key": "556377",
+  "split": "training",
+  "license": "AI Hub dataset terms; NIA project attribution; source-specific rights apply",
+  "license_reviewed": true,
+  "human_reviewed": false,
+  "review_method": "automated",
+  "updated_at": "2026-11-09",
+  "notes": "User-authorized pilot. Automatically screened general-care text only; no drug/dose/diagnosis/procedure guidance. Not expert-reviewed."
+}

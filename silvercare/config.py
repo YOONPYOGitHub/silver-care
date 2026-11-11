@@ -1,0 +1,93 @@
+from functools import lru_cache
+from typing import Literal, Self
+
+from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class DataSourceSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=True, populate_by_name=True
+    )
+
+    aihub_api_key: SecretStr = SecretStr("")
+    welfare_central_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(
+            "WELFARE_CENTRAL_API_KEY", "WELFARE_API_KEY", "welfare_api_key"
+        ),
+    )
+    welfare_local_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(
+            "WELFARE_LOCAL_API_KEY", "WELFARE_API_KEY", "welfare_api_key"
+        ),
+    )
+    nhis_ltc_search_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(
+            "NHIS_LTC_SEARCH_API_KEY", "NHIS_LTC_API_KEY", "nhis_ltc_api_key"
+        ),
+    )
+    nhis_ltc_detail_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(
+            "NHIS_LTC_DETAIL_API_KEY", "NHIS_LTC_API_KEY", "nhis_ltc_api_key"
+        ),
+    )
+    welfare_central_api_endpoint: str = (
+        "https://apis.data.go.kr/B554287/NationalWelfareInformationsV001"
+    )
+    welfare_local_api_endpoint: str = (
+        "https://apis.data.go.kr/B554287/LocalGovernmentWelfareInformations"
+    )
+    nhis_ltc_search_api_endpoint: str = "https://apis.data.go.kr/B550928/searchLtcInsttService02"
+    nhis_ltc_detail_api_endpoint: str = (
+        "https://apis.data.go.kr/B550928/getLtcInsttDetailInfoService02"
+    )
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", populate_by_name=True, hide_input_in_errors=True
+    )
+
+    app_env: str = "development"
+    public_origin: str = "http://localhost:8000"
+    azure_openai_endpoint: str = "https://ai-foundry-m098047.openai.azure.com"
+    azure_openai_deployment: str = "gpt-6.1-terra"
+    azure_search_endpoint: str = ""
+    azure_search_index: str = "silvercare"
+    azure_search_case_index: str = ""
+    retrieval_mode: Literal["keyword", "hybrid"] = "keyword"
+    azure_embedding_deployment: str = ""
+    embedding_dimensions: int = Field(default=512, ge=256, le=1536)
+    semantic_ranking: bool = False
+    rewrite_queries: bool = False
+    azure_speech_endpoint: str = "https://ai-foundry-m098047.cognitiveservices.azure.com"
+    azure_speech_resource_id: str = ""
+    azure_speech_region: str = "koreacentral"
+    azure_speech_voice: str = "ko-KR-SunHiNeural"
+    rate_limit_per_minute: int = Field(default=12, ge=1, le=120)
+    max_concurrent_requests: int = Field(default=4, ge=1, le=20)
+    trusted_proxy: bool = False
+    kdca_health_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices("KDCA_HEALTH_API_KEY", "NHIS_HEALTH_INFO_API_KEY"),
+    )
+
+    @model_validator(mode="after")
+    def production_guards(self) -> Self:
+        if self.retrieval_mode == "hybrid" and not self.azure_embedding_deployment:
+            raise ValueError("Hybrid retrieval requires AZURE_EMBEDDING_DEPLOYMENT")
+        if self.app_env == "production":
+            if not self.public_origin.startswith("https://"):
+                raise ValueError("Production requires an HTTPS PUBLIC_ORIGIN")
+            if not self.azure_search_endpoint:
+                raise ValueError("Production requires AZURE_SEARCH_ENDPOINT")
+        return self
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

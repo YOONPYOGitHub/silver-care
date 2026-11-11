@@ -1,0 +1,12 @@
+{
+  "dataset_id": "REPLACE_WITH_APPROVED_DATASET_ID",
+  "title": "승인된 AI Hub 어르신 대화 데이터",
+  "source_url": "https://aihub.or.kr/",
+  "evidence_kind": "dialogue",
+  "license": "REPLACE_WITH_DATASET_SPECIFIC_TERMS",
+  "license_reviewed": false,
+  "human_reviewed": false,
+  "updated_at": "2026-11-09",
+  "text_paths": ["utterances.*.text"],
+  "notes": "실제 JSON 구조에 맞게 text_paths를 지정하세요. 자동 비식별화는 완전하지 않으므로 사람의 민감정보·이용조건 검토 전에는 적재하지 않습니다."
+}

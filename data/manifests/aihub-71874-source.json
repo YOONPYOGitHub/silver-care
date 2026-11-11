@@ -1,0 +1,15 @@
+{
+  "dataset_id": "aihub-71874-guidelines",
+  "title": "AI Hub 전문 의학지식: 국문 학회 가이드라인",
+  "source_url": "https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71874",
+  "evidence_kind": "dataset_knowledge",
+  "source_schema": "medical_source",
+  "source_file_key": "556339",
+  "split": "training",
+  "license": "AI Hub dataset terms; NIA project attribution; source-specific rights apply",
+  "license_reviewed": true,
+  "human_reviewed": false,
+  "review_method": "automated",
+  "updated_at": "2026-11-09",
+  "notes": "User-authorized pilot. Automated conservative screening, not human or clinician review. Dataset provenance is not an original-document URL."
+}

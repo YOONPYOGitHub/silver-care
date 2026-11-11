@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f2">
+  <meta name="description" content="어르신과 보호자를 위한 따뜻한 AI 돌봄 동행, 온담. 생활 돌봄과 복지 정보를 함께 찾아보세요.">
+  <title>온담 — 오늘도, 당신 곁에</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#message">대화 입력으로 바로 가기</a>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-1 2V11.5a9 9 0 0 1 18 0Z"/><path d="M8 11h8m-8 4h5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v15"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 3C8 2 2 8 5 15s15 6 15-12ZM3 22 15 10"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 5c-3-3-8-3-10-2v16c4-1 7-1 10 2 3-3 6-3 10-2V3c-2-1-7-1-10 2Zm0 0v16"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7L10 14m0-11H3v18h18v-7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><path d="m6 3 4 5-3 3a15 15 0 0 0 6 6l3-3 5 4c-1 5-5 5-10 2S2 11 2 7c0-2 2-4 4-4Z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></symbol>
+  </svg>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="서비스 메뉴">
+      <a class="brand" href="/" aria-label="온담 홈"><img src="/static/mark.svg" alt="" width="42" height="42"><span>온담<small>마음을 잇는 돌봄 동행</small></span></a>
+      <button id="new-chat" class="new-chat"><svg><use href="#i-plus"/></svg>새로운 대화</button>
+      <div class="nav-label">나를 위한 공간</div>
+      <nav class="section-nav" aria-label="돌봄 화면 이동">
+        <a class="nav-item active" href="#conversation" aria-current="location"><svg><use href="#i-chat"/></svg>돌봄 대화<span class="nav-dot" aria-hidden="true"></span></a>
+        <a class="nav-item" href="#topics"><svg><use href="#i-book"/></svg>함께 알아보기<span class="nav-dot" aria-hidden="true"></span></a>
+        <a class="nav-item" href="#voice-settings"><svg><use href="#i-settings"/></svg>음성 · 화면 설정<span class="nav-dot" aria-hidden="true"></span></a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="side-note"><span class="little-flower">✳</span><p>당신의 하루를<br>함께 살펴볼게요.</p><span>궁금한 일도, 나누고 싶은 마음도<br>편하게 이야기해 주세요.</span></div>
+        <div class="private-note"><svg><use href="#i-shield"/></svg><span>대화는 서버에 저장하지 않아요</span></div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="mobile-brand"><img src="/static/mark.svg" alt="" width="30" height="30">온담</div>
+        <div class="breadcrumb">나의 돌봄 동행<span>/</span><strong>온담과 대화하기</strong></div>
+        <div class="topbar-right"><span id="today" class="today"></span><span class="status" id="status" role="status"><span></span>연결 확인 중</span><button id="new-chat-mobile" class="mobile-action" aria-label="새로운 대화"><svg><use href="#i-plus"/></svg></button></div>
+      </header>
+      <div class="content-grid">
+        <main class="main-content" id="conversation">
+          <div class="section-eyebrow"><span class="tiny-sun">☀</span> A LITTLE CARE, EVERY DAY</div>
+          <section class="welcome" id="welcome" aria-labelledby="welcome-title">
+            <div class="welcome-copy">
+              <span class="greeting">반가워요, 저는 온담이에요</span>
+              <h1 id="welcome-title">오늘도,<br><span>당신 곁에.</span></h1>
+              <p>생활과 건강의 궁금한 일부터 오늘의 마음까지.<br>편하게 물어보고, 나에게 맞는 방법을 찾아봐요.</p>
+              <div class="welcome-tag"><span></span>따뜻하게 듣고, 차근차근 알려드릴게요</div>
+            </div>
+            <img class="hero-art" src="/static/together.svg" alt="따뜻한 햇살 아래 함께 앉아 쉬는 두 사람과 식물" width="330" height="310">
+          </section>
+
+          <section id="topics" class="topics" aria-labelledby="topics-title">
+            <div class="section-heading"><h2 id="topics-title">어떤 이야기를 나눠볼까요?</h2><span>편하게 골라보세요</span></div>
+            <div class="topic-grid">
+              <button class="topic-card mint" data-prompt="건강하게 지내려면 오늘 무엇부터 해보면 좋을까요?"><span class="topic-icon"><svg><use href="#i-heart"/></svg></span><strong>생활 · 건강</strong><span>나의 하루를 건강하고 편안하게</span><span class="card-arrow">↗</span></button>
+              <button class="topic-card lavender" data-prompt="제가 받을 수 있는 생활 지원이 궁금해요. 어디에 물어보면 좋을까요?"><span class="topic-icon"><svg><use href="#i-book"/></svg></span><strong>복지 · 지원</strong><span>내가 이용할 수 있는 도움 찾기</span><span class="card-arrow">↗</span></button>
+              <button class="topic-card peach" data-prompt="오늘은 누군가와 이야기를 나누고 싶어요."><span class="topic-icon"><svg><use href="#i-leaf"/></svg></span><strong>마음 나누기</strong><span>오늘의 기분을 편하게 이야기해요</span><span class="card-arrow">↗</span></button>
+            </div>
+            <details class="family-examples">
+              <summary>가족을 돌보고 계신가요?</summary>
+              <p>가족을 위한 질문도 골라보세요.</p>
+              <div class="family-prompts">
+                <button type="button" data-prompt="부모님 돌봄이 처음이에요. 무엇부터 알아보면 좋을까요?">가족 돌봄 시작하기</button>
+                <button type="button" data-prompt="부모님 장기요양 서비스를 알아보고 있어요. 어디에 문의하면 좋을까요?">가족의 돌봄 서비스 알아보기</button>
+                <button type="button" data-prompt="가족을 돌보느라 마음이 지쳐요. 잠시 이야기해도 될까요?">돌보는 나의 마음 나누기</button>
+              </div>
+            </details>
+            <details id="health-library" class="health-library" hidden>
+              <summary>공식 건강정보 찾아보기</summary>
+              <p>AI 답변과 별도로 질병관리청의 원문 텍스트를 확인할 수 있어요.</p>
+              <div class="health-picker">
+                <label for="health-topic">궁금한 주제</label>
+                <select id="health-topic"></select>
+                <button type="button" id="open-health-topic">원문 보기</button>
+              </div>
+              <div id="health-library-result"></div>
+            </details>
+          </section>
+
+          <section class="chat-area" aria-label="온담과 나눈 대화">
+            <div class="chat-divider"><span>우리의 대화가 시작되는 곳</span></div>
+            <div id="messages" role="log" aria-live="polite" aria-relevant="additions text">
+              <article class="message assistant introductory">
+                <img class="avatar" src="/static/mark.svg" alt="" width="36" height="36">
+                <div class="message-body"><div class="message-name">온담<span>당신의 돌봄 동행</span></div><div class="bubble">안녕하세요. 오늘 하루는 어떠셨나요?<br>궁금한 것이나 나누고 싶은 이야기를 편하게 적어주세요. 🌿</div></div>
+              </article>
+            </div>
+          </section>
+          <div id="error" class="error-banner" role="alert" hidden></div>
+          <div id="audio-panel" class="audio-panel" hidden><span>온담의 답변 듣기</span><audio id="audio" controls preload="none"></audio><button id="close-audio" class="text-button" aria-label="음성 재생 닫기">닫기</button></div>
+          <div class="composer-wrap">
+            <div class="composer-hint" id="composer-hint"><svg><use href="#i-shield"/></svg>이름, 연락처, 주민등록번호는 적지 말아 주세요.</div>
+            <form id="chat-form" class="composer">
+              <label class="sr-only" for="message">온담에게 보낼 메시지</label>
+              <textarea id="message" rows="1" maxlength="2000" placeholder="지금 어떤 도움이 필요하신가요?" aria-describedby="composer-help"></textarea>
+              <div class="composer-actions"><button type="button" class="mic-button" id="record" aria-label="음성으로 입력하기" title="설정에서 음성 입력을 켜 주세요" disabled><svg><use href="#i-mic"/></svg></button><button type="submit" class="send-button" id="send" aria-label="메시지 보내기"><svg><use href="#i-arrow"/></svg></button></div>
+            </form>
+            <div class="composer-footer" id="composer-help">
+              <p class="ai-disclaimer">온담은 AI로, 답변에 오류나 오래된 정보가 있을 수 있어요.<br>건강 정보는 참고용이며, 진단·복약 변경·검사 결정은 의료진과 상의해 주세요.<br><button type="button" id="open-info" class="info-link" aria-haspopup="dialog" aria-controls="info-dialog">정보·개인정보 안내</button></p>
+              <span class="key-hint">Enter 전송 · Shift + Enter 줄바꿈</span>
+            </div>
+          </div>
+        </main>
+
+        <aside class="right-panel" aria-label="대화 설정과 도움말">
+          <section class="settings-card" id="voice-settings" aria-labelledby="settings-title">
+            <div class="panel-heading"><span class="panel-icon"><svg><use href="#i-speaker"/></svg></span><h2 id="settings-title">더 편안한 대화</h2></div>
+            <p class="panel-description">나에게 맞는 방법으로 이야기해요.</p>
+            <label class="setting-row"><span><strong>말로 입력하기</strong><small>마이크로 편하게 이야기해요</small></span><input id="stt-toggle" type="checkbox" role="switch" disabled><span class="switch" aria-hidden="true"></span></label>
+            <label class="setting-row"><span><strong>답변 읽어주기</strong><small>답변을 편안한 목소리로 들어요</small></span><input id="tts-toggle" type="checkbox" role="switch" disabled><span class="switch" aria-hidden="true"></span></label>
+            <div class="voice-privacy"><svg><use href="#i-shield"/></svg><span>켰을 때만 음성을 처리해요.<br>녹음은 최대 45초, 상담 이력으로 보관하지 않아요.</span></div>
+            <div class="font-setting"><span>글자 크기</span><div role="group" aria-label="글자 크기 선택"><button id="font-normal" class="selected" aria-pressed="true">가<span class="sr-only"> 기본 크기</span></button><button id="font-large" aria-pressed="false">가<span class="sr-only"> 큰 크기</span></button></div></div>
+          </section>
+
+          <section class="daily-card" aria-labelledby="daily-title">
+            <div class="daily-heading"><span>🌱</span><span>오늘의 작은 돌봄</span></div>
+            <h2 id="daily-title">오늘은 어떤 하루를<br>보내고 계신가요?</h2>
+            <p>하고 싶은 일도, 궁금한 일도<br>하나씩 이야기해 주세요.<br>온담이 차근차근 함께할게요.</p>
+            <div class="daily-decoration" aria-hidden="true">◡</div>
+          </section>
+
+          <section class="trust-card" aria-labelledby="trust-title"><h2 id="trust-title"><svg><use href="#i-check"/></svg>알고 사용해 주세요</h2><ul><li>확인한 자료가 있으면 출처를 표시해요.</li><li>상담 예시는 의료 근거로 쓰지 않아요.</li><li>대화는 새로고침하면 사라져요.</li></ul></section>
+          <a class="emergency-link" id="open-emergency" href="tel:119"><span class="emergency-icon"><svg><use href="#i-phone"/></svg></span><span><strong>응급 상황이라면 119</strong><small id="emergency-hint">전화 앱에서 119를 열어요</small></span><span aria-hidden="true">›</span></a>
+          <div class="powered">돌봄이 필요한 순간, 온담과 함께해요.</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+  <dialog id="emergency-dialog" aria-labelledby="emergency-title">
+    <div class="emergency-content">
+      <div class="info-heading"><h2 id="emergency-title">응급 상황에는 119</h2><button type="button" id="close-emergency" class="text-button" autofocus>닫기</button></div>
+      <p class="emergency-number">119<span>국내 응급전화</span></p>
+      <p>의식이 없거나 숨쉬기 어렵고, 갑작스러운 심한 가슴 통증·마비가 있다면 채팅을 기다리지 말고 <strong>119에 직접 전화해 주세요.</strong></p>
+      <a class="emergency-call" href="tel:119"><svg aria-hidden="true"><use href="#i-phone"/></svg>전화 앱에서 119 열기</a>
+      <p class="emergency-device-note">휴대전화에서는 전화 앱으로 연결할 수 있어요. PC나 내장 브라우저에서 전화 앱이 열리지 않으면 <strong>휴대전화에서 119를 직접 눌러 주세요.</strong></p>
+      <p class="emergency-limit">온담은 직접 신고하거나 위치를 전송하지 않아요. 이 창을 여는 것만으로 전화가 걸리지는 않아요.</p>
+    </div>
+  </dialog>
+  <dialog id="info-dialog" aria-labelledby="info-title">
+    <div class="info-content">
+      <div class="info-heading"><h2 id="info-title">온담 정보·개인정보 안내</h2><button type="button" id="close-info" class="text-button" autofocus>닫기</button></div>
+      <section><h3>AI 답변과 출처</h3><p>온담은 생활 돌봄 정보를 돕는 AI이며 의료진을 대신하지 않아요. 공개 데이터와 공식 기관의 자료를 참고하더라도, 원자료의 한계나 정제·검색·답변 생성 과정에서 오류가 생길 수 있어요. 출처 표시는 정확성이나 최신성을 보장하지 않아요.</p><p>진단, 약의 복용량 변경·중단, 검사 필요성 등 개인별 판단은 의사·약사 등 의료전문가와 상의해 주세요. 응급 상황에는 채팅을 기다리지 말고 직접 119에 전화해 주세요. 온담은 신고하거나 위치를 전송하지 않아요.</p></section>
+      <section><h3>질문과 대화의 처리</h3><p>답변을 만들기 위해 질문과 최근 대화가 외부 AI 응답·자료 검색 서비스로 전송돼요. 일부 개인정보 패턴을 가리지만 완전한 익명화를 보장하지는 않아요. 이름, 연락처, 상세 주소, 주민등록번호는 입력하지 말아 주세요.</p><p>대화 이력은 현재 브라우저 메모리에서 유지되며 새로고침이나 새로운 대화로 지울 수 있어요. 앱 서버는 대화·녹음을 상담 이력으로 보관하지 않아요. 요청 처리에는 메모리나 임시 파일이 사용될 수 있어요. 외부 처리 서비스의 데이터 처리·보존 정책은 별도로 적용돼요.</p></section>
+      <section><h3>공식 건강정보와 답변</h3><p>건강 질문에 관련된 질병관리청 자료를 콘텐츠 번호로 조회해 기존 참고자료와 함께 AI 답변의 근거로 사용해요. 질문이나 대화 이력은 이 요청에 포함하지 않아요. 관련 본문 발췌는 답변 생성을 위해 외부 AI 응답 서비스로 전송돼요.</p><p>답변의 출처 링크와 별도의 원문 보기에서 자료를 확인할 수 있어요. 원문 보기의 텍스트는 AI가 재작성한 답변이 아니에요. 같은 자료의 반복 요청을 줄이기 위해 서버 메모리에 최대 1시간 보관할 수 있어요. 표·그림·영상과 전체 내용은 원문 링크에서 확인해 주세요. 자료의 출처와 이용조건은 각 항목에 표시해요.</p></section>
+      <section><h3>선택형 음성</h3><p>말로 입력하기를 켜고 녹음하면 해당 음성이 외부 음성 인식 서비스로 전송돼요. 녹음은 최대 45초이며 인식된 내용을 확인한 뒤 직접 보낼 수 있어요. 답변 듣기를 사용하면 답변 텍스트를 외부 음성 합성 서비스로 보내 음성을 만들어요.</p><p>별도의 가입이나 접속 코드 없이 이용할 수 있어요. 대화는 현재 화면에서만 유지되므로 공용 기기에서는 이용을 마친 뒤 새로고침해 주세요.</p></section>
+    </div>
+  </dialog>
+  <template id="loading-template"><article class="message assistant loading"><img class="avatar" src="/static/mark.svg" alt="" width="36" height="36"><div class="message-body"><div class="message-name">온담</div><div class="bubble thinking" role="status"><span></span><span></span><span></span><small>마음을 담아 답변을 준비하고 있어요</small></div></div></article></template>
+</body>
+</html>
