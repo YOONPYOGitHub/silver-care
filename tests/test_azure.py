@@ -223,6 +223,32 @@ async def test_speech_xml_escaping_and_stt():
         await service.close()
 
 
+async def test_speech_provider_receives_plain_body_not_markdown_or_source_footer():
+    from xml.etree import ElementTree as ET
+
+    from tests.test_speech_text import ANSWER
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        root = ET.fromstring(request.content)
+        spoken = "".join(root.itertext())
+        assert "통증이 심하다면 오늘 의료진에게 진료받아 보세요." in spoken
+        assert "즉시 119에 연락해 도움을 요청하세요." in spoken
+        assert spoken.endswith("허리 통증은 언제부터 시작됐나요?")
+        for marker in ("**", "[5]", "출처:", "신경외과학회", "마미 증후군 자료"):
+            assert marker not in spoken
+        return httpx.Response(200, content=b"audio")
+
+    service = make_services(handler)
+    try:
+        assert await service.synthesize(ANSWER) == b"audio"
+        assert len(calls) == 1
+    finally:
+        await service.close()
+
+
 async def test_dataset_knowledge_is_cited_with_clear_provenance_and_notice():
     def handler(request):
         body = json.loads(request.content)

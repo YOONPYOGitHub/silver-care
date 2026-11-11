@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from silvercare.config import Settings
 from silvercare.health import HealthService, article_evidence, select_topics
-from silvercare.models import ChatRequest, ChatResponse, Source
+from silvercare.models import ChatRequest, ChatResponse, Source, SpeechRequest
 from silvercare.privacy import redact
 from silvercare.safety import MEDICAL_CAUTION, NOTICE, emergency_response, medical_caution
 
@@ -448,6 +448,7 @@ class AzureServices:
         )
 
     async def synthesize(self, text: str) -> bytes:
+        text = SpeechRequest(text=text).text
         if not self.settings.azure_speech_resource_id:
             raise UpstreamError("speech")
         bearer = f"aad#{self.settings.azure_speech_resource_id}#{await self.token()}"

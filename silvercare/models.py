@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from silvercare.speech_text import spoken_text
+
 
 class Message(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -70,3 +72,11 @@ class ChatResponse(BaseModel):
 class SpeechRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("text")
+    @classmethod
+    def speech_body(cls, value: str) -> str:
+        text = spoken_text(value)
+        if not text:
+            raise ValueError("읽을 답변 내용이 없습니다.")
+        return text

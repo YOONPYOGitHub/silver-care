@@ -652,6 +652,25 @@ assert.equal(app.permissions.length, 1);
 assert.equal(app.count("/api/speech/transcribe"), 0);
 """)
 
+    def test_voice_and_manual_playback_preserve_display_answer_and_use_shared_server_conversion(
+        self,
+    ):
+        self.run_javascript(r"""
+const raw = "**중요한 안내입니다.** 119에 도움을 요청하세요.[5]\n\n출처:\n[5] 합성 출처";
+app.respond("/api/chat", async () => app.json(app.answer(raw)));
+await app.start();
+await app.finish();
+const voiceRequest = app.requests.filter(r => r.path === "/api/speech/synthesize")[0];
+assert.equal(JSON.parse(voiceRequest.options.body).text, raw,
+  "Server must receive citation structure to distinguish references from answer body");
+assert.equal(app.state.history[1].content, raw, "Screen/history answer must not be rewritten");
+app.pause();
+await app.speak(raw);
+const manualRequest = app.requests.filter(r => r.path === "/api/speech/synthesize")[1];
+assert.equal(JSON.parse(manualRequest.options.body).text, raw,
+  "Manual listening must use the same server conversion as voice mode");
+""")
+
     def test_topics_interrupt_current_speech_without_waiting_for_audio_end(self):
         self.run_javascript(r"""
 await app.start();

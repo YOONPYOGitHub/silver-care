@@ -165,6 +165,22 @@ def test_voice_endpoints(config, services):
         )
 
 
+def test_speech_endpoint_normalizes_display_answer_and_rejects_source_only_text(config, services):
+    from tests.test_speech_text import ANSWER
+
+    with TestClient(create_app(config, services)) as client:
+        response = client.post("/api/speech/synthesize", json={"text": ANSWER})
+        assert response.status_code == 200
+        text = services.synthesize.call_args.args[0]
+        assert "통증이 심하다면 오늘 의료진에게 진료받아 보세요." in text
+        assert "119" in text and "허리 통증은 언제부터 시작됐나요?" in text
+        assert "**" not in text and "[5]" not in text and "출처:" not in text
+        services.synthesize.reset_mock()
+        invalid = client.post("/api/speech/synthesize", json={"text": "출처: [1] 학회 안내"})
+        assert invalid.status_code == 422
+        services.synthesize.assert_not_called()
+
+
 def test_upstream_error_is_explicit(config, services):
     services.chat.side_effect = UpstreamError("search", 403)
     with TestClient(create_app(config, services)) as client:

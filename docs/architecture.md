@@ -65,6 +65,7 @@ AKS LoadBalancer → Caddy → FastAPI
 | [azure.py](../silvercare/azure.py) | 현재 시스템 지침·검색어 확장·질문 임베딩·검색·API 근거 결합·생성·인용 검증·음성 |
 | [health.py](../silvercare/health.py) | 21개 허용 주제·주제 연결·질병관리청 XML·TLS·캐시·근거 문단 선별 |
 | [models.py](../silvercare/models.py) | 대화·출처·공식 건강정보의 요청·응답 타입 |
+| [speech_text.py](../silvercare/speech_text.py) | 화면 답변을 읽기용 텍스트로 변환·출처 목록/서식 기호 제외 |
 | [config.py](../silvercare/config.py) | 앱/수집 설정·SecretStr·환경변수 호환·운영 가드 |
 | [safety.py](../silvercare/safety.py) | 응급 표현의 고정 응답·AI/건강정보 안내 |
 | [privacy.py](../silvercare/privacy.py) | NFKC·공백 정리·개인정보 패턴 최소화 |

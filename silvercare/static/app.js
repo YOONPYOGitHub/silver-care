@@ -424,7 +424,7 @@ async function speakText(text) {
 $("close-audio").addEventListener("click", stopAudio);
 
 function speechText(text) {
-  return text.replace(/\[\d+\]/g, "").slice(0, 4000);
+  return text.slice(0, 4000);
 }
 
 function voiceType() {
