@@ -219,6 +219,7 @@ uv run python -m silvercare.evaluate \
 - ‘잠시 멈춤’·텍스트 전환·새 대화·숨겨진 페이지는 음성 세션을 중단한다. 취소된 인식·재생 응답으로 마이크가 다시 시작되면 안 된다.
 - 음성·텍스트는 `state.history`를 공유한다. 텍스트로 전환해도 이미 수락한 대화·인용은 사라지지 않는다.
 - 실제 모바일 기기의 마이크 권한·스피커·브라우저 수명주기는 기기별 검증이 필요하다. 마이크나 Web Audio를 지원하지 않는 환경에는 텍스트 모드를 안내한다.
+- 자동 검증은 브라우저의 모의 마이크에 허용된 실제 음성 표본을 넣어 STT·답변·TTS와 다음 마이크 시작까지 확인한다. 이는 실제 아이폰·갤럭시의 하드웨어 마이크나 소음 환경 검증을 대신하지 않는다.
 
 ### 검증 결과와 한계
 
@@ -228,6 +229,7 @@ uv run python -m silvercare.evaluate \
 | --- | --- | --- |
 | 고정 12질문 검색 | 키워드 Hit@6 4/12, hybrid 10/12, hybrid MRR@6 0.542 | `retrieval-evaluation-final.json` |
 | 본인/보호자·129·질병관리청 답변 | 14/14, 질병관리청 4질문은 실제 원문 URL 인용 필수 | `audience-evaluation.json` |
+| 텍스트·음성 상태 전이 | 프론트엔드 24개 테스트·52개 하위 시나리오 | `tests/test_frontend.py` |
 | 음성 인식 | 62세 1화자·6발화·34.755초, CER 4/77=5.19%, WER 6/28=21.43% | `speech-evaluation.json` |
 
 보고서는 `data/processed/expanded/`에 있다.

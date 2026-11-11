@@ -6,7 +6,7 @@ const state = {
   audioURL: null, speaking: false, audioGeneration: 0, audioRequest: null,
 };
 const voice = {
-  active: false, generation: 0, phase: "paused", context: null, output: null,
+  active: false, generation: 0, phase: "paused", status: null, context: null, output: null,
   stream: null, recorder: null, input: null, analyser: null, timer: null,
   permissionPending: false, request: null,
 };
@@ -443,6 +443,11 @@ function voiceCurrent(token) {
 }
 
 function updateVoiceControls() {
+  if (voice.status !== null) {
+    $("voice-status").textContent = voice.status
+      + (voice.phase === "paused" && voice.permissionPending
+        ? " 열려 있는 마이크 허용 창을 먼저 닫거나 선택해 주세요." : "");
+  }
   $("mode-voice").disabled = !voiceAvailable();
   $("voice-start").disabled = !voiceAvailable() || state.busy || voice.permissionPending
     || (voice.active && voice.phase !== "speaking" && voice.phase !== "preparing");
@@ -456,7 +461,7 @@ function updateVoiceControls() {
 
 function setVoicePhase(phase, message) {
   voice.phase = phase;
-  $("voice-status").textContent = message;
+  voice.status = message;
   updateVoiceControls();
 }
 
@@ -505,9 +510,7 @@ function cancelVoice(message, closeContext = true) {
     void voice.context.close().catch(() => {});
     voice.context = null;
   }
-  let notice = message || "음성 대화를 잠시 멈췄어요. 대화 시작을 누르면 다시 들을게요.";
-  if (voice.permissionPending) notice += " 열려 있는 마이크 허용 창을 먼저 닫거나 선택해 주세요.";
-  setVoicePhase("paused", notice);
+  setVoicePhase("paused", message || "음성 대화를 잠시 멈췄어요. 대화 시작을 누르면 다시 들을게요.");
 }
 
 function pauseVoice(message) {
@@ -615,7 +618,7 @@ async function listenForTurn(token) {
       }
     });
     recorder.start(1000);
-    setVoicePhase("listening", "듣고 있어요. 말씀을 마치고 3초 쉬거나 말씀 완료를 눌러 주세요.");
+    setVoicePhase("listening", "듣고 있어요. 말씀을 마치고 3초 쉬거나 말 마침을 눌러 주세요.");
     const samples = new Float32Array(voice.analyser.fftSize);
     const started = Date.now();
     let speechMs = 0;

@@ -510,6 +510,7 @@ app.cancel("""
 app.element("voice-start").click();
 app.element("mode-voice").click();
 assert.equal(app.permissions.length, 1, "Do not overlap a still-pending permission prompt");
+assert.match(app.element("voice-status").textContent, /열려 있는 마이크 허용 창/);
 const stream = await app.grant();
 assert.equal(stream.track.stops, 1);
 assert.equal(app.voice.stream, null);
@@ -517,6 +518,7 @@ assert.equal(app.voice.recorder, null);
 assert.equal(app.voice.active, false);
 assert.equal(app.timers.size, 0);
 assert.equal(app.contexts[0].state, "closed");
+assert.doesNotMatch(app.element("voice-status").textContent, /열려 있는 마이크 허용 창/);
 """
                 )
 
@@ -748,6 +750,12 @@ assert.equal(app.voice.stream, null);
 assert.equal(app.state.busy, false);
 assert.equal(app.element("mode-text").disabled, false);
 assert.equal(app.outputs.length, 0);
+if (stage === "permission") {
+  assert.equal(app.voice.permissionPending, false);
+  assert.equal(app.element("voice-start").disabled, false);
+  assert.match(app.element("voice-status").textContent, /마이크 사용이 허용되지 않았어요/);
+  assert.doesNotMatch(app.element("voice-status").textContent, /열려 있는 마이크 허용 창/);
+}
 """
                 )
 
