@@ -18,6 +18,8 @@
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v15"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8"/></symbol>
     <symbol id="i-speaker" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5V4Zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-wait" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
     <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Z"/><path d="m8 12 3 3 5-6"/></symbol>
     <symbol id="i-leaf" viewBox="0 0 24 24"><path d="M20 3C8 2 2 8 5 15s15 6 15-12ZM3 22 15 10"/></symbol>
@@ -111,16 +113,22 @@
           <div id="audio-panel" class="audio-panel" hidden><span>온담의 답변 듣기</span><audio id="audio" controls preload="none"></audio><button id="close-audio" class="text-button" aria-label="음성 재생 닫기">닫기</button></div>
           <div class="composer-wrap">
             <div class="composer-hint" id="composer-hint"><svg><use href="#i-shield"/></svg>이름, 연락처, 주민등록번호는 적지 말아 주세요.</div>
-            <section id="voice-panel" class="voice-panel" aria-label="음성 대화" hidden>
-              <div class="voice-orb" aria-hidden="true"><svg><use href="#i-mic"/></svg></div>
-              <h2>온담과 말로 이야기해요</h2>
+            <section id="voice-panel" class="voice-panel" data-voice-phase="paused" aria-labelledby="voice-panel-title" hidden>
+              <h2 id="voice-panel-title" class="sr-only">온담과 말로 이야기해요</h2>
+              <div class="voice-orb" aria-hidden="true"><svg><use id="voice-state-icon" href="#i-pause"/></svg></div>
+              <p id="voice-state-label" class="voice-state-label">잠시 멈췄어요</p>
+              <div id="voice-input-feedback" class="voice-input-feedback" hidden>
+                <div id="voice-input-meter" class="voice-input-meter" data-level="0" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+                <p id="voice-input-label" class="voice-input-label">편하게 말씀해 주세요</p>
+              </div>
+              <div id="voice-processing" class="voice-processing" aria-hidden="true" hidden><span></span><span></span><span></span></div>
               <p id="voice-status" class="voice-status" role="status" aria-live="polite">음성 대화를 준비하고 있어요.</p>
               <p id="voice-transcript" class="voice-transcript" aria-live="polite"></p>
               <p id="voice-caption" class="voice-caption">말을 마치면 답변을 읽어드리고, 다음 말씀을 들을게요.</p>
               <div class="voice-controls">
                 <button type="button" id="voice-start">대화 시작</button>
-                <button type="button" id="voice-finish" disabled>말 마침</button>
-                <button type="button" id="voice-pause" disabled>잠시 멈춤</button>
+                <button type="button" id="voice-finish" disabled hidden>말 마침</button>
+                <button type="button" id="voice-pause" disabled hidden>잠시 멈춤</button>
               </div>
               <button type="button" id="voice-to-text" class="voice-text-switch">글로 전환·수정하기</button>
               <p class="voice-session-note">말을 마치고 3초 정도 쉬면 자동으로 보내요. 먼저 보내려면 ‘말 마침’을 눌러 주세요. 한 번에 최대 2분까지 말씀하실 수 있으며 대화 전체 시간 제한은 아니에요. ‘잠시 멈춤’이나 글로 전환하면 마이크를 꺼요.</p>

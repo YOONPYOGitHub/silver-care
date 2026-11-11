@@ -36,6 +36,12 @@ def test_ui_and_headers(config, services):
         assert 'id="voice-panel"' in response.text
         assert 'id="voice-finish"' in response.text
         assert 'id="voice-pause"' in response.text
+        assert 'id="voice-state-icon"' in response.text
+        assert 'id="voice-state-label"' in response.text
+        assert 'id="voice-input-meter"' in response.text
+        assert 'id="voice-input-label"' in response.text
+        assert 'id="voice-processing"' in response.text
+        assert 'data-voice-phase="paused"' in response.text
         assert 'id="stt-toggle"' not in response.text
         assert 'id="tts-toggle"' not in response.text
         assert 'id="record"' not in response.text

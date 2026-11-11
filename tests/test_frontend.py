@@ -382,6 +382,128 @@ const thirdChat = app.requests.filter(r => r.path === "/api/chat")[2];
 assert.equal(JSON.parse(thirdChat.options.body).history.length, 4);
 """)
 
+    def test_microphone_visual_tracks_actual_input_not_a_decorative_sound_animation(self):
+        self.run_javascript(r"""
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "paused");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-pause");
+assert.equal(app.element("voice-finish").hidden, true);
+assert.equal(app.element("voice-pause").hidden, true);
+app.element("mode-voice").click();
+await app.flush();
+assert.equal(app.voice.phase, "permission");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-wait");
+assert.equal(app.element("voice-input-feedback").hidden, true);
+assert.equal(app.element("voice-processing").hidden, false);
+await app.grant();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "listening");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-mic");
+assert.equal(app.element("voice-state-label").textContent, "듣고 있어요");
+assert.equal(app.element("voice-input-feedback").hidden, false);
+assert.equal(app.element("voice-processing").hidden, true);
+assert.equal(app.element("voice-start").hidden, true);
+assert.equal(app.element("voice-finish").hidden, false);
+assert.equal(app.element("voice-pause").hidden, false);
+await app.tick(100);
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
+app.setRMS(0.03);
+await app.tick(100);
+const low = Number(app.element("voice-input-meter").getAttribute("data-level"));
+assert(low > 0 && low < 5);
+assert.equal(app.element("voice-input-label").textContent, "소리가 들어오고 있어요");
+assert.doesNotMatch(app.element("voice-input-label").textContent, /인식 완료/);
+app.setRMS(0.2);
+await app.tick(100);
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "5");
+app.setRMS(0);
+await app.tick(100);
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
+assert.equal(app.element("voice-input-label").textContent, "편하게 말씀해 주세요");
+assert.equal(app.element("voice-state-label").textContent, "듣고 있어요");
+app.element("voice-pause").click();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "paused");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-pause");
+assert.equal(app.element("voice-input-feedback").hidden, true);
+assert.equal(app.element("voice-processing").hidden, true);
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
+assert.equal(app.element("voice-start").hidden, false);
+assert.equal(app.element("voice-start").textContent, "대화 시작");
+assert.equal(app.element("voice-pause").hidden, true);
+assert.equal(app.streams[0].track.stops, 1);
+""")
+
+    def test_processing_and_playback_have_distinct_visuals_and_contextual_actions(self):
+        self.run_javascript(r"""
+const stt = deferred(), chat = deferred(), tts = deferred();
+app.respond("/api/speech/transcribe", () => stt.promise);
+app.respond("/api/chat", () => chat.promise);
+app.respond("/api/speech/synthesize", () => tts.promise);
+await app.start();
+app.setRMS(0.08);
+await app.tick(300);
+await app.finish();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "transcribing");
+assert.equal(app.element("voice-state-label").textContent, "말씀을 확인하고 있어요");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-wait");
+assert.equal(app.element("voice-processing").hidden, false);
+assert.equal(app.element("voice-input-feedback").hidden, true);
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
+assert.equal(app.element("voice-start").hidden, true);
+assert.equal(app.element("voice-finish").hidden, true);
+assert.equal(app.element("voice-pause").hidden, false);
+assert.equal(app.streams[0].track.stops, 1);
+stt.resolve(app.json({ text: "잠이 잘 오지 않아요." }));
+await app.flush();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "thinking");
+assert.equal(app.element("voice-state-label").textContent, "답변을 생각하고 있어요");
+chat.resolve(app.json(app.answer()));
+await app.flush();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "preparing");
+assert.equal(app.element("voice-state-label").textContent, "답변을 준비하고 있어요");
+assert.equal(app.element("voice-start").textContent, "답변 멈추고 말하기");
+assert.equal(app.element("voice-start").hidden, false);
+tts.resolve(app.audio());
+await app.flush();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "speaking");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-speaker");
+assert.equal(app.element("voice-state-label").textContent, "온담이 이야기하고 있어요");
+assert.equal(app.element("voice-processing").hidden, true);
+assert.equal(app.element("voice-input-feedback").hidden, true);
+assert.equal(app.element("voice-start").disabled, false);
+assert.equal(app.permissions.length, 1, "Speaker state must not record");
+app.outputs[0].end();
+await app.flush();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "permission");
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
+await app.grant();
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "listening");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-mic");
+assert.equal(app.element("voice-start").hidden, true);
+""")
+
+    def test_input_visuals_clear_on_every_voice_cancellation_and_no_timers_restart_them(self):
+        for kind in ["pause", "switch", "reset", "pagehide", "hidden"]:
+            with self.subTest(kind=kind):
+                self.run_javascript(
+                    r"""
+await app.start();
+app.setRMS(0.1);
+await app.tick(300);
+assert(Number(app.element("voice-input-meter").getAttribute("data-level")) > 0);
+app.cancel("""
+                    + repr(kind)
+                    + r""");
+await app.tick(500);
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "paused");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-pause");
+assert.equal(app.element("voice-processing").hidden, true);
+assert.equal(app.element("voice-input-feedback").hidden, true);
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
+assert.equal(app.streams[0].track.stops, 1);
+assert.equal(app.permissions.length, 1);
+assert.equal(app.timers.size, 0);
+"""
+                )
+
     def test_repeated_record_and_finish_clicks_do_not_duplicate_requests(self):
         self.run_javascript(r"""
 await app.start();
@@ -466,6 +588,7 @@ app.outputs[0].end();
 await app.flush();
 await app.grant();
 assert.equal(app.voice.phase, "listening");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-mic");
 assert.equal(app.voice.active, true);
 """)
 
@@ -726,6 +849,9 @@ assert.equal(app.voice.active, false);
 assert.equal(app.voice.context, null);
 assert.equal(app.element("error").hidden, false);
 assert.match(app.element("error").textContent, /시험 오류/);
+assert.equal(app.element("voice-panel").getAttribute("data-voice-phase"), "paused");
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-pause");
+assert.equal(app.element("voice-input-meter").getAttribute("data-level"), "0");
 assert.equal(app.state.history.length, """
                     + ("2" if path.endswith("synthesize") else "0")
                     + r""");

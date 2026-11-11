@@ -9,12 +9,24 @@ const voice = {
   active: false, generation: 0, phase: "paused", status: null, context: null, output: null,
   stream: null, recorder: null, input: null, analyser: null, timer: null,
   permissionPending: false, request: null,
+  inputLevel: 0,
 };
 const VOICE_SAMPLE_MS = 100;
 const VOICE_SILENCE_MS = 3000;
 const VOICE_NO_INPUT_MS = 30000;
 const VOICE_MAX_MS = 120000;
 const VOICE_MAX_BYTES = 4 * 1024 * 1024;
+const VOICE_SIGNAL_THRESHOLD = 0.018;
+const VOICE_PHASE_LABELS = {
+  paused: ["pause", "잠시 멈췄어요"],
+  starting: ["wait", "마이크를 준비하고 있어요"],
+  permission: ["wait", "마이크 연결을 기다리고 있어요"],
+  listening: ["mic", "듣고 있어요"],
+  transcribing: ["wait", "말씀을 확인하고 있어요"],
+  thinking: ["wait", "답변을 생각하고 있어요"],
+  preparing: ["wait", "답변을 준비하고 있어요"],
+  speaking: ["speaker", "온담이 이야기하고 있어요"],
+};
 const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
 const initialMessages = $("messages").cloneNode(true);
 $("today").textContent = new Intl.DateTimeFormat("ko-KR", {
@@ -448,15 +460,39 @@ function updateVoiceControls() {
       + (voice.phase === "paused" && voice.permissionPending
         ? " 열려 있는 마이크 허용 창을 먼저 닫거나 선택해 주세요." : "");
   }
+  const [iconName, label] = VOICE_PHASE_LABELS[voice.phase];
+  const listening = voice.phase === "listening";
+  const interruptible = voice.active && ["speaking", "preparing"].includes(voice.phase);
+  $("voice-panel").setAttribute("data-voice-phase", voice.phase);
+  $("voice-state-icon").setAttribute("href", `#i-${iconName}`);
+  $("voice-state-label").textContent = label;
+  $("voice-input-feedback").hidden = !listening;
+  $("voice-processing").hidden = !["starting", "permission", "transcribing", "thinking", "preparing"].includes(voice.phase);
+  if (!listening) setVoiceInputLevel(0);
   $("mode-voice").disabled = !voiceAvailable();
+  $("voice-start").hidden = voice.active && !interruptible;
+  $("voice-start").textContent = interruptible ? "답변 멈추고 말하기" : "대화 시작";
   $("voice-start").disabled = !voiceAvailable() || state.busy || voice.permissionPending
     || (voice.active && voice.phase !== "speaking" && voice.phase !== "preparing");
+  $("voice-finish").hidden = !listening;
   $("voice-finish").disabled = voice.phase !== "listening";
+  $("voice-pause").hidden = !voice.active;
   $("voice-pause").disabled = !voice.active;
   document.querySelectorAll("[data-prompt]").forEach((button) => {
     button.disabled = state.busy || (voice.active
       && ["starting", "permission", "transcribing"].includes(voice.phase));
   });
+}
+
+function setVoiceInputLevel(rms) {
+  const level = voice.phase === "listening" && voice.active && voice.stream
+    && rms >= VOICE_SIGNAL_THRESHOLD ? Math.min(5, Math.ceil(rms / 0.025)) : 0;
+  voice.inputLevel = level;
+  if ($("voice-input-meter").getAttribute("data-level") !== String(level)) {
+    $("voice-input-meter").setAttribute("data-level", String(level));
+  }
+  const label = level > 0 ? "소리가 들어오고 있어요" : "편하게 말씀해 주세요";
+  if ($("voice-input-label").textContent !== label) $("voice-input-label").textContent = label;
 }
 
 function setVoicePhase(phase, message) {
@@ -474,6 +510,7 @@ function releaseMicrophone() {
   voice.analyser = null;
   voice.stream?.getTracks().forEach((track) => track.stop());
   voice.stream = null;
+  setVoiceInputLevel(0);
 }
 
 function stopVoiceOutput() {
@@ -628,8 +665,9 @@ async function listenForTurn(token) {
       if (!voiceCurrent(token) || voice.phase !== "listening") return;
       voice.analyser.getFloatTimeDomainData(samples);
       const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+      setVoiceInputLevel(rms);
       const now = Date.now();
-      if (rms >= 0.018) {
+      if (rms >= VOICE_SIGNAL_THRESHOLD) {
         speechMs += VOICE_SAMPLE_MS;
         if (speechMs >= 300) heardSpeech = true;
         if (heardSpeech) lastSpeech = now;
@@ -728,7 +766,7 @@ async function speakVoiceAnswer(result, token) {
         void listenForTurn(token);
       }
     };
-    setVoicePhase("speaking", "답변을 들려드리고 있어요. 지금 말씀하려면 대화 시작을 눌러 주세요.");
+    setVoicePhase("speaking", "마이크는 꺼져 있어요. 지금 말씀하시려면 ‘답변 멈추고 말하기’를 눌러 주세요.");
     output.start();
   } catch (error) {
     if (voiceCurrent(token)) failVoice(new Error(`답변 글은 남아 있어요. 음성 재생을 멈췄어요. ${error.message}`));
