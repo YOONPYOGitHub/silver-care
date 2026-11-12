@@ -1,6 +1,6 @@
 # 실행·수집·배포·검증
 
-코드·릴리스 설정 확인 기준일: 2026-11-11.
+코드·릴리스 설정 확인 기준일: 2026-11-12.
 프로젝트 루트에서 실행한다. 구조는 [아키텍처](architecture.md), 데이터 의미는 [RAG·API](rag.md)를 따른다.
 
 ## 1. 설정과 비밀값
@@ -25,6 +25,7 @@
 복지 계열은 전용 키가 없으면 `WELFARE_API_KEY`, 장기요양 계열은 `NHIS_LTC_API_KEY`도 읽는다.
 키별 변수는 분리하며 범용 `API_KEY`는 사용하지 않는다.
 전용 변수를 빈 값으로 설정하면 호환 이름으로 자동 전환한다고 가정하지 않는다.
+`NHIS_HEALTH_INFO_API_KEY`만 사용할 경우 예시 파일의 빈 `KDCA_HEALTH_API_KEY=` 줄을 제거한다.
 키 문자열은 설정 파일에서 보존하고 요청 때 한 번 디코딩해 요청 인코딩에 맡긴다.
 
 네 수집 endpoint는 `WELFARE_CENTRAL_API_ENDPOINT`, `WELFARE_LOCAL_API_ENDPOINT`,
@@ -45,7 +46,7 @@ POST는 실제 404로 응답해 이 API에서 사용하지 않는다.
 ```bash
 uv sync --group dev
 az login
-APP_ENV=development PUBLIC_ORIGIN=http://127.0.0.1:8000 \
+APP_ENV=development PUBLIC_ORIGIN=http://127.0.0.1:8000 TRUSTED_PROXY=false \
 uv run uvicorn silvercare.app:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
@@ -66,6 +67,7 @@ import uvicorn
 os.environ.update(json.loads(Path("data/processed/expanded/release.json").read_text()))
 os.environ["APP_ENV"] = "development"
 os.environ["PUBLIC_ORIGIN"] = "http://127.0.0.1:8000"
+os.environ["TRUSTED_PROXY"] = "false"
 uvicorn.run("silvercare.app:create_app", factory=True, host="127.0.0.1", port=8000)
 PY
 ```
@@ -187,6 +189,10 @@ Basic 검색은 replica 1 / partition 1도 유료이며 비용은 Azure 현행 �
 
 ## 6. 검증
 
+전체 검증에는 Python 개발 의존성과 Node.js가 필요하다.
+Node.js는 브라우저용 JavaScript의 문법 검사와 모의 DOM·미디어 회귀 테스트에 사용하며 앱 서버 실행에는 필요하지 않다.
+Node.js가 없으면 프론트엔드 pytest가 건너뛰어질 수 있으므로 건너뛴 테스트까지 확인한다.
+
 ```bash
 uv run pytest -q
 uv run ruff check silvercare tests
@@ -225,18 +231,41 @@ uv run python -m silvercare.evaluate \
 - 실제 모바일 기기의 마이크 권한·스피커·브라우저 수명주기는 기기별 검증이 필요하다. 마이크나 Web Audio를 지원하지 않는 환경에는 텍스트 모드를 안내한다.
 - 자동 검증은 브라우저의 모의 마이크에 허용된 실제 음성 표본을 넣어 STT·답변·TTS와 다음 마이크 시작까지 확인한다. 이는 실제 아이폰·갤럭시의 하드웨어 마이크나 소음 환경 검증을 대신하지 않는다.
 
+상태는 아래 순서로 연결하며, 텍스트 모드에는 음성 패널을 표시하지 않는다.
+
+| `voice.phase` | 표시 | 마이크·동작 |
+| --- | --- | --- |
+| `starting`, `permission` | 시계·연결 안내·점 표시 | 브라우저 마이크 권한/연결 대기 |
+| `listening` | 마이크·파장·입력 음량 막대 | 듣는 중. 무음이면 막대 0, ‘말 마침’으로 조기 전송 |
+| `transcribing` | 시계·‘말씀을 확인하고 있어요’ | 마이크 종료 후 파일을 STT에 전송 |
+| `thinking` | 시계·‘답변을 생각하고 있어요’ | 같은 검색·대화 API 사용, 마이크 꺼짐 |
+| `preparing` | 시계·‘답변을 준비하고 있어요’ | TTS 준비, ‘답변 멈추고 말하기’로 중단 가능 |
+| `speaking` | 스피커·‘온담이 이야기하고 있어요’ | Web Audio 재생, 마이크 꺼짐 |
+| `paused` | 일시정지·‘잠시 멈췄어요’ | 자동 재청취 없음. ‘대화 시작’으로 재개 |
+
+브라우저 수동 점검에서는 다음을 확인한다.
+
+1. 처음에는 글로 대화하며, 모드 선택 전 마이크 권한을 요청하거나 소리를 재생하지 않는다.
+2. 말로 전환해 실제 입력에 막대가 반응하고 무음에서 낮아지는지 확인한다.
+3. 답변 중 스피커로 바뀌고, 재생 완료 후 마이크로 돌아오는지 확인한다.
+4. ‘잠시 멈춤’·텍스트 전환·탭 이탈 후 파장·입력 막대·마이크 사용이 멈추는지 확인한다.
+5. 마이크 거부·STT 실패는 안내하고, 글로 전환해 대화를 계속할 수 있어야 한다.
+6. 화면의 굵은 글씨·출처는 유지하되 음성은 서식 기호·인용 번호·출처 목록을 읽지 않아야 한다.
+7. 320/390/768/1440 화면 폭·큰 글씨·동작 줄이기에서 상태와 버튼을 구분할 수 있어야 한다.
+
 ### 검증 결과와 한계
 
-아래는 2026-11-11의 처리 보고서에 대응하는 측정값이며 영구적 품질 보장이 아니다.
+검색·답변·음성 수치는 2026-11-11 처리 보고서의 측정값이다.
+프론트엔드 상태·취소·접근성 검증은 코드 변경에 맞춰 실행하며 영구적 품질 보장이 아니다.
 
 | 평가 | 결과 | 보고서 |
 | --- | --- | --- |
 | 고정 12질문 검색 | 키워드 Hit@6 4/12, hybrid 10/12, hybrid MRR@6 0.542 | `retrieval-evaluation-final.json` |
 | 본인/보호자·129·질병관리청 답변 | 14/14, 질병관리청 4질문은 실제 원문 URL 인용 필수 | `audience-evaluation.json` |
-| 텍스트·음성 상태 전이 | 모드 전환·자동 재청취·취소·읽기 경로 회귀 검사 | `tests/test_frontend.py` |
+| 텍스트·음성 상태 전이 | 모드 전환·자동 재청취·취소·입력 막대·상태 표시·읽기 경로 | `tests/test_frontend.py` |
 | 음성 인식 | 62세 1화자·6발화·34.755초, CER 4/77=5.19%, WER 6/28=21.43% | `speech-evaluation.json` |
 
-보고서는 `data/processed/expanded/`에 있다.
+평가 JSON 보고서는 `data/processed/expanded/`에 있다. 프론트엔드 테스트 결과는 pytest 출력으로 확인한다.
 검색 적중률은 의학적 정답률이 아니며 생성식 검색어 확장은 실행마다 변동할 수 있다.
 답변 평가는 합성 시나리오의 표현·인용·길이 회귀 검사이며 임상 검증이나 실제 어르신 사용성 검증이 아니다.
 음성은 1화자의 편의 표본이며 70~90대·다른 지역·소음 환경을 대표하지 않는다.
@@ -279,12 +308,14 @@ SHA256 `86341d7119995d26bdb2ad35992292471891123be9267d59dc24700aa7501617`이다.
 `data/catalog.json`·manifest·직접 작성한 안내·평가 시나리오는 업로드 대상이다.
 원본 API 가이드는 Git 복제본에 포함되지 않으므로 제공처에서 내려받아 로컬에서 참고한다.
 
-Git 저장소를 만든 뒤 실제 후보를 확인한다.
+커밋·푸시 전에 실제 추적·업로드 대상을 확인한다. `main` 반영 전에는 6절의 전체 검증도 실행한다.
 
 ```bash
 git status --short --ignored
 git ls-files --others --exclude-standard
 git diff --cached --stat
+git diff --check
+git diff --cached --check
 ```
 
 `.gitignore`는 이미 추적 중인 비밀값이나 커밋 이력을 삭제하지 않는다.
