@@ -49,10 +49,20 @@ def test_ui_and_headers(config, services):
         assert "한 번에 최대 2분까지 말씀하실 수" in response.text
         assert "녹음" not in response.text
         assert "마이크 입력을 일시적으로 수집" in response.text
-        settings_panel = response.text.split('id="voice-settings"', 1)[1].split("</section>", 1)[0]
-        assert "글자 크기를 편하게 조절해 보세요." in settings_panel
-        assert "글과 음성은 앱 서버에 상담 이력으로 저장하지 않아요." in settings_panel
-        assert "음성 모드에서만 마이크를 사용해요." not in settings_panel
+        assert 'id="conversation-scroll"' in response.text
+        assert 'id="conversation-dock"' in response.text
+        dock = response.text.split('id="conversation-dock"', 1)[1].split("</main>", 1)[0]
+        assert 'id="mode-text"' in dock and 'id="mode-voice"' in dock
+        assert 'id="chat-form"' in dock and 'id="voice-panel"' in dock
+        assert 'id="screen-settings"' in response.text
+        settings_dialog = response.text.split('id="screen-settings"', 1)[1].split("</dialog>", 1)[0]
+        assert 'id="font-normal"' in settings_dialog and 'id="font-large"' in settings_dialog
+        assert 'id="close-settings"' in settings_dialog
+        assert 'href="#screen-settings"' in response.text
+        assert "화면 설정 열기" not in response.text
+        assert response.text.count("settings-trigger") == 2
+        assert 'id="voice-to-text"' not in response.text
+        assert 'id="new-answer"' in response.text
         assert 'id="info-dialog"' in response.text
         assert 'id="open-info"' in response.text
         assert 'class="family-examples"' in response.text
@@ -66,7 +76,7 @@ def test_ui_and_headers(config, services):
         assert "돌봄에 정답이 없듯" not in response.text
         assert 'id="open-emergency"' in response.text
         assert 'id="emergency-dialog"' in response.text
-        assert response.text.count('href="tel:119"') == 2
+        assert response.text.count('href="tel:119"') == 3
         assert "휴대전화에서 119를 직접 눌러 주세요." in response.text
         assert "이 창을 여는 것만으로 전화가 걸리지는 않아요." in response.text
         assert 'class="section-nav"' in response.text

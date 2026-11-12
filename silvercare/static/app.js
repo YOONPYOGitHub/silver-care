@@ -29,6 +29,8 @@ const VOICE_PHASE_LABELS = {
 };
 const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
 const initialMessages = $("messages").cloneNode(true);
+let followConversation = true;
+let activeSection = "#conversation";
 $("today").textContent = new Intl.DateTimeFormat("ko-KR", {
   month: "long", day: "numeric", weekday: "long",
 }).format(new Date());
@@ -258,14 +260,44 @@ function addMessage(role, text, result = null) {
   return article;
 }
 
-function scrollMessageIntoView(element) {
-  element.scrollIntoView({
-    behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
-    block: "nearest",
-  });
+function scrollMessageIntoView(element, force = false) {
+  if (!force && !followConversation) {
+    $("new-answer").hidden = false;
+    return;
+  }
+  const scroller = $("conversation-scroll");
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: "instant" });
+  followConversation = true;
+  $("new-answer").hidden = true;
 }
 
+$("conversation-scroll").addEventListener("scroll", () => {
+  const scroller = $("conversation-scroll");
+  followConversation = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 72;
+  if (followConversation) $("new-answer").hidden = true;
+}, { passive: true });
+$("new-answer").addEventListener("click", () => {
+  scrollMessageIntoView($("messages").lastElementChild, true);
+});
+
+function updateAppViewport() {
+  const viewport = globalThis.visualViewport;
+  if (!viewport) return;
+  document.documentElement.style.setProperty("--app-height", `${viewport.height}px`);
+  document.documentElement.style.setProperty("--app-top", `${viewport.offsetTop}px`);
+  document.documentElement.setAttribute(
+    "data-viewport-size", viewport.height < 300 ? "tiny" : viewport.height <= 550 ? "compact" : "regular"
+  );
+}
+globalThis.visualViewport?.addEventListener("resize", updateAppViewport, { passive: true });
+globalThis.visualViewport?.addEventListener("scroll", updateAppViewport, { passive: true });
+updateAppViewport();
+
 function setActiveSection(href) {
+  activeSection = href;
+  $("current-section-title").textContent = href === "#topics" ? "함께 알아보기"
+    : href === "#screen-settings" ? "화면 설정" : "온담과 대화하기";
+  $("topics-title").textContent = href === "#topics" ? "함께 알아보기" : "어떤 이야기를 나눠볼까요?";
   document.querySelectorAll(".section-nav .nav-item").forEach((link) => {
     const active = link.getAttribute("href") === href;
     link.classList.toggle("active", active);
@@ -274,43 +306,50 @@ function setActiveSection(href) {
   });
 }
 
+function showTopics(focus = true) {
+  if (!$("health-library").hidden) $("health-library").open = true;
+  const scroller = $("conversation-scroll");
+  const target = $("topics");
+  const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    + scroller.scrollTop - 20;
+  scroller.scrollTo({ top, behavior: "instant" });
+  if (focus) {
+    target.setAttribute("tabindex", "-1");
+    target.focus({ preventScroll: true });
+  }
+}
+
 function focusComposerUnlessBrowsing() {
-  if (state.mode === "voice") return;
+  if (state.mode === "voice" || !followConversation) return;
   if (document.activeElement?.closest(".sidebar, .right-panel, #topics, dialog")) return;
   $("message").focus({ preventScroll: true });
 }
 
 document.querySelectorAll(".section-nav .nav-item").forEach((link) => {
   link.addEventListener("click", (event) => {
+    if (link.classList.contains("settings-trigger")) return;
     event.preventDefault();
     const href = link.getAttribute("href");
-    const target = document.querySelector(href);
     setActiveSection(href);
     history.replaceState(null, "", href);
-    const behavior = matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth";
     if (href === "#conversation") {
-      $(state.mode === "voice" ? "voice-panel" : "chat-form").scrollIntoView({ behavior, block: "nearest" });
+      scrollMessageIntoView($("messages").lastElementChild, true);
       if (!state.busy && state.mode === "text") $("message").focus({ preventScroll: true });
     } else {
-      target.scrollIntoView({ behavior, block: "nearest" });
-      const control = target.querySelector("button:not(:disabled), input:not(:disabled)");
-      if (control) control.focus({ preventScroll: true });
-      else {
-        target.setAttribute("tabindex", "-1");
-        target.focus({ preventScroll: true });
-      }
+      showTopics();
     }
   });
 });
 for (const [id, href] of [
-  ["topics", "#topics"], ["voice-settings", "#voice-settings"],
+  ["topics", "#topics"],
   ["chat-form", "#conversation"], ["messages", "#conversation"],
 ]) {
   $(id).addEventListener("focusin", () => setActiveSection(href));
 }
 setActiveSection(
-  ["#topics", "#voice-settings"].includes(location.hash) ? location.hash : "#conversation"
+  location.hash === "#topics" ? "#topics" : "#conversation"
 );
+if (location.hash === "#topics") showTopics(false);
 
 async function sendMessage(text, voiceToken = null) {
   if (state.busy || !text.trim()) return;
@@ -337,7 +376,7 @@ async function sendMessage(text, voiceToken = null) {
   const loadingMessage = $("messages").lastElementChild;
   const chat = { controller: new AbortController(), userMessage, loadingMessage, voiceToken, value };
   state.chat = chat;
-  scrollMessageIntoView($("messages").lastElementChild);
+  scrollMessageIntoView($("messages").lastElementChild, true);
   let result;
   try {
     const response = await api("/api/chat", {
@@ -778,7 +817,6 @@ async function speakVoiceAnswer(result, token) {
 $("mode-voice").disabled = true;
 $("mode-text").addEventListener("click", () => selectMode("text"));
 $("mode-voice").addEventListener("click", () => selectMode("voice"));
-$("voice-to-text").addEventListener("click", () => selectMode("text"));
 $("voice-start").addEventListener("click", () => { void startVoice(); });
 $("voice-finish").addEventListener("click", finishVoiceTurn);
 $("voice-pause").addEventListener("click", () => pauseVoice());
@@ -791,10 +829,13 @@ $("new-chat").addEventListener("click", () => {
   $("message").value = "";
   $("voice-transcript").textContent = "";
   $("voice-caption").textContent = "";
+  $("message").style.height = "";
+  $("new-answer").hidden = true;
   showError("");
   setActiveSection("#conversation");
   history.replaceState(null, "", location.pathname + location.search);
-  $("welcome").scrollIntoView({ block: "start" });
+  $("conversation-scroll").scrollTo({ top: 0, behavior: "instant" });
+  followConversation = true;
 });
 for (const size of ["normal", "large"]) {
   $(`font-${size}`).addEventListener("click", () => {
@@ -818,6 +859,8 @@ function bindDialog(openId, closeId, dialogId, openOnClick = true) {
   if (openOnClick) {
     $(openId).addEventListener("click", (event) => {
       event.preventDefault();
+      if (voice.active) pauseVoice("안내창을 열어 잠시 멈췄어요. 닫은 뒤 대화 시작을 눌러 주세요.");
+      stopAudio();
       dialog.showModal();
     });
   }
@@ -830,15 +873,69 @@ function bindDialog(openId, closeId, dialogId, openOnClick = true) {
   });
 }
 bindDialog("open-info", "close-info", "info-dialog");
+let settingsOpener = null;
+let settingsPreviousSection = "#conversation";
+function openScreenSettings(opener) {
+  if ($("screen-settings").open) return;
+  settingsOpener = opener;
+  settingsPreviousSection = activeSection;
+  if (voice.active) pauseVoice("화면 설정을 열어 잠시 멈췄어요. 닫은 뒤 대화 시작을 눌러 주세요.");
+  stopAudio();
+  setActiveSection("#screen-settings");
+  history.replaceState(null, "", "#screen-settings");
+  $("screen-settings").showModal();
+}
+document.querySelectorAll(".settings-trigger").forEach((button) => {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    openScreenSettings(button);
+  });
+});
+$("close-settings").addEventListener("click", () => $("screen-settings").close());
+$("screen-settings").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    $("screen-settings").close();
+  }
+});
+$("screen-settings").addEventListener("close", () => {
+  setActiveSection(settingsPreviousSection);
+  history.replaceState(null, "", settingsPreviousSection);
+  settingsOpener?.focus({ preventScroll: true });
+});
+if (["#screen-settings", "#voice-settings"].includes(location.hash)) {
+  openScreenSettings(document.querySelector(
+    matchMedia("(max-width: 700px)").matches ? ".topbar-settings" : ".section-nav .settings-trigger"
+  ));
+}
+addEventListener("hashchange", () => {
+  if (location.hash === "#topics") {
+    setActiveSection("#topics");
+    showTopics(false);
+  } else if (location.hash === "#conversation") {
+    setActiveSection("#conversation");
+    scrollMessageIntoView($("messages").lastElementChild, true);
+  }
+});
 const mobileTelephoneLink = navigator.userAgentData?.mobile === true
   || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 if (!mobileTelephoneLink) {
-  $("open-emergency").setAttribute("aria-haspopup", "dialog");
-  $("open-emergency").setAttribute("aria-controls", "emergency-dialog");
+  for (const id of ["open-emergency", "open-emergency-compact"]) {
+    $(id).setAttribute("aria-haspopup", "dialog");
+    $(id).setAttribute("aria-controls", "emergency-dialog");
+  }
   $("emergency-hint").textContent = "전화 연결 방법을 확인해요";
 }
 bindDialog("open-emergency", "close-emergency", "emergency-dialog", !mobileTelephoneLink);
+if (!mobileTelephoneLink) {
+  $("open-emergency-compact").addEventListener("click", (event) => {
+    event.preventDefault();
+    if (voice.active) pauseVoice("119 안내를 확인하는 동안 잠시 멈췄어요.");
+    stopAudio();
+    $("emergency-dialog").showModal();
+  });
+}
 
 let healthTopics = [];
 $("open-health-topic").addEventListener("click", () => {
@@ -860,6 +957,7 @@ async function initializeHealthLibrary() {
       $("health-topic").append(option);
     });
     $("health-library").hidden = false;
+    if (activeSection === "#topics") showTopics(false);
   } catch (error) {
     showError(`공식 건강정보 목록을 불러오지 못했어요. ${error.message}`);
   }

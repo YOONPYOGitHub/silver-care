@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#f6f7f2">
   <meta name="description" content="어르신과 보호자를 위한 따뜻한 AI 돌봄 동행, 온담. 생활 돌봄과 복지 정보를 함께 찾아보세요.">
   <title>온담 — 오늘도, 당신 곁에</title>
@@ -11,7 +11,7 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <a class="skip" href="#message">대화 입력으로 바로 가기</a>
+  <a class="skip" href="#conversation-dock">대화 조작으로 바로 가기</a>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-1 2V11.5a9 9 0 0 1 18 0Z"/><path d="M8 11h8m-8 4h5"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -37,7 +37,7 @@
       <nav class="section-nav" aria-label="돌봄 화면 이동">
         <a class="nav-item active" href="#conversation" aria-current="location"><svg><use href="#i-chat"/></svg>돌봄 대화<span class="nav-dot" aria-hidden="true"></span></a>
         <a class="nav-item" href="#topics"><svg><use href="#i-book"/></svg>함께 알아보기<span class="nav-dot" aria-hidden="true"></span></a>
-        <a class="nav-item" href="#voice-settings"><svg><use href="#i-settings"/></svg>음성 · 화면 설정<span class="nav-dot" aria-hidden="true"></span></a>
+        <a class="nav-item settings-trigger" href="#screen-settings" aria-haspopup="dialog" aria-controls="screen-settings"><svg><use href="#i-settings"/></svg>화면 설정<span class="nav-dot" aria-hidden="true"></span></a>
       </nav>
       <div class="sidebar-bottom">
         <div class="side-note"><span class="little-flower">✳</span><p>당신의 하루를<br>함께 살펴볼게요.</p><span>궁금한 일도, 나누고 싶은 마음도<br>편하게 이야기해 주세요.</span></div>
@@ -48,11 +48,12 @@
     <div class="workspace">
       <header class="topbar">
         <div class="mobile-brand"><img src="/static/mark.svg" alt="" width="30" height="30">온담</div>
-        <div class="breadcrumb">나의 돌봄 동행<span>/</span><strong>온담과 대화하기</strong></div>
-        <div class="topbar-right"><span id="today" class="today"></span><span class="status" id="status" role="status"><span></span>연결 확인 중</span><button id="new-chat-mobile" class="mobile-action" aria-label="새로운 대화"><svg><use href="#i-plus"/></svg></button></div>
+        <div class="breadcrumb">나의 돌봄 동행<span>/</span><strong id="current-section-title">온담과 대화하기</strong></div>
+        <div class="topbar-right"><span id="today" class="today"></span><span class="status" id="status" role="status"><span></span>연결 확인 중</span><a id="open-emergency-compact" class="compact-emergency" href="tel:119" aria-label="119 전화 이용 안내">119</a><button type="button" class="settings-trigger topbar-settings" aria-label="화면 설정" aria-haspopup="dialog" aria-controls="screen-settings"><svg aria-hidden="true"><use href="#i-settings"/></svg></button><button id="new-chat-mobile" class="mobile-action" aria-label="새로운 대화"><svg><use href="#i-plus"/></svg></button></div>
       </header>
       <div class="content-grid">
         <main class="main-content" id="conversation">
+          <div id="conversation-scroll" class="conversation-scroll" tabindex="0" role="region" aria-label="대화 내용과 주제">
           <div class="section-eyebrow"><span class="tiny-sun">☀</span> A LITTLE CARE, EVERY DAY</div>
           <section class="welcome" id="welcome" aria-labelledby="welcome-title">
             <div class="welcome-copy">
@@ -62,14 +63,6 @@
               <div class="welcome-tag"><span></span>따뜻하게 듣고, 차근차근 알려드릴게요</div>
             </div>
             <img class="hero-art" src="/static/together.svg" alt="따뜻한 햇살 아래 함께 앉아 쉬는 두 사람과 식물" width="330" height="310">
-          </section>
-
-          <section class="conversation-mode" aria-label="대화 방식">
-            <div class="mode-buttons" role="group" aria-label="대화 방식 선택">
-              <button type="button" id="mode-text" aria-pressed="true"><svg aria-hidden="true"><use href="#i-chat"/></svg>글로 대화</button>
-              <button type="button" id="mode-voice" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#i-mic"/></svg>말로 대화</button>
-            </div>
-            <p id="mode-description">글을 입력하고 보내기를 눌러 주세요. 대화 중에도 방식을 바꿀 수 있어요.</p>
           </section>
 
           <section id="topics" class="topics" aria-labelledby="topics-title">
@@ -109,9 +102,18 @@
               </article>
             </div>
           </section>
-          <div id="error" class="error-banner" role="alert" hidden></div>
-          <div id="audio-panel" class="audio-panel" hidden><span>온담의 답변 듣기</span><audio id="audio" controls preload="none"></audio><button id="close-audio" class="text-button" aria-label="음성 재생 닫기">닫기</button></div>
-          <div class="composer-wrap">
+          </div>
+          <section id="conversation-dock" class="composer-wrap conversation-dock" tabindex="-1" aria-label="대화 조작부">
+            <button type="button" id="new-answer" class="new-answer" hidden>새 답변 보기 ↓</button>
+            <div class="conversation-mode">
+              <div class="mode-buttons" role="group" aria-label="대화 방식 선택">
+                <button type="button" id="mode-text" aria-pressed="true"><svg aria-hidden="true"><use href="#i-chat"/></svg>글로 대화</button>
+                <button type="button" id="mode-voice" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#i-mic"/></svg>말로 대화</button>
+              </div>
+              <p id="mode-description">글을 입력하고 보내기를 눌러 주세요. 대화 중에도 방식을 바꿀 수 있어요.</p>
+            </div>
+            <div id="error" class="error-banner" role="alert" hidden></div>
+            <div id="audio-panel" class="audio-panel" hidden><span>온담의 답변 듣기</span><audio id="audio" controls preload="none"></audio><button id="close-audio" class="text-button" aria-label="음성 재생 닫기">닫기</button></div>
             <div class="composer-hint" id="composer-hint"><svg><use href="#i-shield"/></svg>이름, 연락처, 주민등록번호는 적지 말아 주세요.</div>
             <section id="voice-panel" class="voice-panel" data-voice-phase="paused" aria-labelledby="voice-panel-title" hidden>
               <h2 id="voice-panel-title" class="sr-only">온담과 말로 이야기해요</h2>
@@ -123,15 +125,13 @@
               </div>
               <div id="voice-processing" class="voice-processing" aria-hidden="true" hidden><span></span><span></span><span></span></div>
               <p id="voice-status" class="voice-status" role="status" aria-live="polite">음성 대화를 준비하고 있어요.</p>
-              <p id="voice-transcript" class="voice-transcript" aria-live="polite"></p>
-              <p id="voice-caption" class="voice-caption">말을 마치면 답변을 읽어드리고, 다음 말씀을 들을게요.</p>
+              <p id="voice-transcript" hidden></p>
+              <p id="voice-caption" hidden></p>
               <div class="voice-controls">
                 <button type="button" id="voice-start">대화 시작</button>
                 <button type="button" id="voice-finish" disabled hidden>말 마침</button>
                 <button type="button" id="voice-pause" disabled hidden>잠시 멈춤</button>
               </div>
-              <button type="button" id="voice-to-text" class="voice-text-switch">글로 전환·수정하기</button>
-              <p class="voice-session-note">말을 마치고 3초 정도 쉬면 자동으로 보내요. 먼저 보내려면 ‘말 마침’을 눌러 주세요. 한 번에 최대 2분까지 말씀하실 수 있으며 대화 전체 시간 제한은 아니에요. ‘잠시 멈춤’이나 글로 전환하면 마이크를 꺼요.</p>
             </section>
             <form id="chat-form" class="composer">
               <label class="sr-only" for="message">온담에게 보낼 메시지</label>
@@ -139,20 +139,14 @@
               <div class="composer-actions"><button type="submit" class="send-button" id="send" aria-label="메시지 보내기"><svg><use href="#i-arrow"/></svg></button></div>
             </form>
             <div class="composer-footer" id="composer-help">
-              <p class="ai-disclaimer">온담은 AI로, 답변에 오류나 오래된 정보가 있을 수 있어요.<br>건강 정보는 참고용이며, 진단·복약 변경·검사 결정은 의료진과 상의해 주세요.<br><button type="button" id="open-info" class="info-link" aria-haspopup="dialog" aria-controls="info-dialog">정보·개인정보 안내</button></p>
+              <p class="ai-disclaimer">AI 답변은 틀릴 수 있어요. 건강 판단은 의료진과 상의해 주세요.</p>
+              <button type="button" id="open-info" class="info-link" aria-haspopup="dialog" aria-controls="info-dialog">이용 안내</button>
               <span class="key-hint">Enter 전송 · Shift + Enter 줄바꿈</span>
             </div>
-          </div>
+          </section>
         </main>
 
-        <aside class="right-panel" aria-label="대화 설정과 도움말">
-          <section class="settings-card" id="voice-settings" aria-labelledby="settings-title">
-            <div class="panel-heading"><span class="panel-icon"><svg><use href="#i-settings"/></svg></span><h2 id="settings-title">더 편안한 대화</h2></div>
-            <p class="panel-description">글자 크기를 편하게 조절해 보세요.</p>
-            <div class="font-setting"><span>글자 크기</span><div role="group" aria-label="글자 크기 선택"><button id="font-normal" class="selected" aria-pressed="true">가<span class="sr-only"> 기본 크기</span></button><button id="font-large" aria-pressed="false">가<span class="sr-only"> 큰 크기</span></button></div></div>
-            <div class="voice-privacy"><svg><use href="#i-shield"/></svg><span>대화는 현재 화면에서만 이어져요.<br>글과 음성은 앱 서버에 상담 이력으로 저장하지 않아요.</span></div>
-          </section>
-
+        <aside class="right-panel" aria-label="돌봄 도움말">
           <section class="daily-card" aria-labelledby="daily-title">
             <div class="daily-heading"><span>🌱</span><span>오늘의 작은 돌봄</span></div>
             <h2 id="daily-title">오늘은 어떤 하루를<br>보내고 계신가요?</h2>
@@ -160,11 +154,18 @@
             <div class="daily-decoration" aria-hidden="true">◡</div>
           </section>
 
-          <section class="trust-card" aria-labelledby="trust-title"><h2 id="trust-title"><svg><use href="#i-check"/></svg>알고 사용해 주세요</h2><ul><li>확인한 자료가 있으면 출처를 표시해요.</li><li>상담 예시는 의료 근거로 쓰지 않아요.</li><li>대화는 새로고침하면 사라져요.</li></ul></section>
+          <section class="trust-card" aria-labelledby="trust-title"><h2 id="trust-title"><svg><use href="#i-check"/></svg>알고 사용해 주세요</h2><ul><li>확인한 자료가 있으면 출처를 표시해요.</li><li>상담 예시는 의료 근거로 쓰지 않아요.</li><li>대화는 새로고침하면 사라져요.</li><li>글과 음성은 앱 서버에 상담 이력으로 저장하지 않아요.</li></ul></section>
           <a class="emergency-link" id="open-emergency" href="tel:119"><span class="emergency-icon"><svg><use href="#i-phone"/></svg></span><span><strong>응급 상황이라면 119</strong><small id="emergency-hint">전화 앱에서 119를 열어요</small></span><span aria-hidden="true">›</span></a>
           <div class="powered">돌봄이 필요한 순간, 온담과 함께해요.</div>
         </aside>
       </div>
+      <dialog id="screen-settings" aria-labelledby="screen-settings-title">
+        <div class="info-heading"><h2 id="screen-settings-title">화면 설정</h2><button type="button" id="close-settings" class="text-button" autofocus>닫기</button></div>
+        <p class="settings-description">읽기 편한 글자 크기를 골라 주세요. 대화 내용은 그대로 이어져요.</p>
+        <div class="font-setting"><span>글자 크기</span><div role="group" aria-label="글자 크기 선택"><button type="button" id="font-normal" class="selected" aria-pressed="true">가<span class="sr-only"> 기본 크기</span></button><button type="button" id="font-large" aria-pressed="false">가<span class="sr-only"> 큰 크기</span></button></div></div>
+        <p class="settings-description">설정창을 열면 음성 대화는 잠시 멈춰요. 닫은 뒤 ‘대화 시작’을 눌러 이어가세요.</p>
+        <details class="settings-help"><summary>말로 대화하는 방법</summary><p>말을 마치고 3초 정도 쉬면 자동으로 보내요. 먼저 보내려면 ‘말 마침’을 눌러 주세요. 한 번에 최대 2분까지 말씀하실 수 있으며 전체 대화 시간 제한은 아니에요. ‘잠시 멈춤’이나 글로 전환하면 마이크를 꺼요.</p></details>
+      </dialog>
     </div>
   </div>
   <dialog id="emergency-dialog" aria-labelledby="emergency-title">
@@ -180,7 +181,7 @@
   <dialog id="info-dialog" aria-labelledby="info-title">
     <div class="info-content">
       <div class="info-heading"><h2 id="info-title">온담 정보·개인정보 안내</h2><button type="button" id="close-info" class="text-button" autofocus>닫기</button></div>
-      <section><h3>AI 답변과 출처</h3><p>온담은 생활 돌봄 정보를 돕는 AI이며 의료진을 대신하지 않아요. 공개 데이터와 공식 기관의 자료를 참고하더라도, 원자료의 한계나 정제·검색·답변 생성 과정에서 오류가 생길 수 있어요. 출처 표시는 정확성이나 최신성을 보장하지 않아요.</p><p>진단, 약의 복용량 변경·중단, 검사 필요성 등 개인별 판단은 의사·약사 등 의료전문가와 상의해 주세요. 응급 상황에는 채팅을 기다리지 말고 직접 119에 전화해 주세요. 온담은 신고하거나 위치를 전송하지 않아요.</p></section>
+      <section><h3>AI 답변과 출처</h3><p>온담은 AI로, 답변에 오류나 오래된 정보가 있을 수 있어요. 생활 돌봄 정보를 돕지만 의료진을 대신하지 않아요. 공개 데이터와 공식 기관의 자료를 참고하더라도, 원자료의 한계나 정제·검색·답변 생성 과정에서 오류가 생길 수 있어요. 출처 표시는 정확성이나 최신성을 보장하지 않아요.</p><p>진단, 약의 복용량 변경·중단, 검사 필요성 등 개인별 판단은 의사·약사 등 의료전문가와 상의해 주세요. 응급 상황에는 채팅을 기다리지 말고 직접 119에 전화해 주세요. 온담은 신고하거나 위치를 전송하지 않아요.</p></section>
       <section><h3>질문과 대화의 처리</h3><p>답변을 만들기 위해 질문과 최근 대화가 외부 AI 응답·자료 검색 서비스로 전송돼요. 일부 개인정보 패턴을 가리지만 완전한 익명화를 보장하지는 않아요. 이름, 연락처, 상세 주소, 주민등록번호는 입력하지 말아 주세요.</p><p>대화 이력은 현재 브라우저 메모리에서 유지되며 새로고침이나 새로운 대화로 지울 수 있어요. 앱 서버는 대화·음성을 상담 이력으로 보관하지 않아요. 요청 처리에는 메모리나 임시 파일이 사용될 수 있어요. 외부 처리 서비스의 데이터 처리·보존 정책은 별도로 적용돼요.</p></section>
       <section><h3>공식 건강정보와 답변</h3><p>건강 질문에 관련된 질병관리청 자료를 콘텐츠 번호로 조회해 기존 참고자료와 함께 AI 답변의 근거로 사용해요. 질문이나 대화 이력은 이 요청에 포함하지 않아요. 관련 본문 발췌는 답변 생성을 위해 외부 AI 응답 서비스로 전송돼요.</p><p>답변의 출처 링크와 별도의 원문 보기에서 자료를 확인할 수 있어요. 원문 보기의 텍스트는 AI가 재작성한 답변이 아니에요. 같은 자료의 반복 요청을 줄이기 위해 서버 메모리에 최대 1시간 보관할 수 있어요. 표·그림·영상과 전체 내용은 원문 링크에서 확인해 주세요. 자료의 출처와 이용조건은 각 항목에 표시해요.</p></section>
       <section><h3>텍스트와 음성 대화</h3>

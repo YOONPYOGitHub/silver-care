@@ -26,6 +26,11 @@ class Element extends EventTarget {
     this.value = "";
     this.textContent = "";
     this.style = {};
+    this.scrollTop = 0;
+    this.scrollHeight = 1000;
+    this.clientHeight = 500;
+    this.scrollCalls = 0;
+    this.open = false;
     this.childNodes = [];
     this.attributes = new Map();
     this.dataset = {};
@@ -66,11 +71,17 @@ class Element extends EventTarget {
   }
   closest() { return null; }
   scrollIntoView() {}
+  getBoundingClientRect() { return { top: this.rectTop ?? 0 }; }
+  scrollTo(options) {
+    this.scrollTop = Math.max(0, Math.min(options.top, this.scrollHeight - this.clientHeight));
+    this.scrollCalls += 1;
+    this.dispatchEvent(new Event("scroll"));
+  }
   pause() {}
   load() {}
   disconnect() {}
-  showModal() {}
-  close() {}
+  showModal() { this.open = true; }
+  close() { this.open = false; this.dispatchEvent(new Event("close")); }
   click() { if (!this.disabled) this.dispatchEvent(new Event("click")); }
 }
 
@@ -84,6 +95,8 @@ function fixture(settings = {}) {
   const document = new EventTarget();
   document.hidden = false;
   document.body = new Element("body");
+  document.documentElement = new Element("html");
+  document.documentElement.style.setProperty = function (key, value) { this[key] = value; };
   document.getElementById = element;
   document.createElement = () => new Element();
   document.createElementNS = () => new Element();
@@ -91,16 +104,28 @@ function fixture(settings = {}) {
     const node = new Element(); node.textContent = text; return node;
   };
   const topics = [new Element("topic")];
+  const navLinks = ["#conversation", "#topics", "#screen-settings"].map((href, index) => {
+    const link = element(`nav-${index}`);
+    link.setAttribute("href", href);
+    link.classList.add("nav-item");
+    return link;
+  });
+  navLinks[2].classList.add("settings-trigger");
+  const settingsTriggers = [navLinks[2], element("open-settings-top")];
   topics[0].dataset.prompt = "잠을 잘 자려면 어떻게 하나요?";
   document.querySelectorAll = (selector) => {
     if (selector === "[data-prompt]") return topics;
+    if (selector === ".settings-trigger") return settingsTriggers;
+    if (selector === ".section-nav .nav-item") return navLinks;
     const descendants = (node) => [node, ...node.childNodes.flatMap(descendants)];
     if (selector === ".speak-action") {
       return descendants(element("messages")).filter((node) => node.className === "speak-action");
     }
     return [];
   };
-  document.querySelector = () => null;
+  document.querySelector = (selector) => selector === ".topbar-settings"
+    ? settingsTriggers[1]
+    : selector === ".section-nav .settings-trigger" ? settingsTriggers[0] : null;
   let focusCalls = 0;
   Element.prototype.focus = function () { focusCalls += 1; document.activeElement = this; };
   Element.prototype.blur = function () {
@@ -121,6 +146,9 @@ function fixture(settings = {}) {
   const timers = new Map();
   const lifecycle = new EventTarget();
   const createdURLs = [];
+  const visualViewport = new EventTarget();
+  visualViewport.height = 700;
+  visualViewport.offsetTop = 0;
   let now = 0;
   let timerID = 0;
   let rms = 0;
@@ -183,6 +211,7 @@ function fixture(settings = {}) {
   const audio = () => ({ ok: true, blob: async () => new Blob(["answer audio"]) });
   const context = vm.createContext({
     console, Blob, FormData, Event, AbortController, Float32Array,
+    visualViewport,
     MediaRecorder: settings.noRecorder ? undefined : Recorder,
     AudioContext: settings.noAudio ? undefined : AudioContext,
     document,
@@ -234,7 +263,8 @@ function fixture(settings = {}) {
   vm.runInContext(fs.readFileSync("silvercare/static/app.js", "utf8"), context);
   const app = {
     element, document, topics, permissions, streams, recorders, contexts, outputs, requests,
-    timers, lifecycle, createdURLs, answer, json, audio, flush,
+    timers, lifecycle, createdURLs, answer, json, audio, flush, settingsTriggers, visualViewport,
+    navLinks, location: context.location,
     state: vm.runInContext("state", context),
     voice: vm.runInContext("voice", context),
     send: vm.runInContext("sendMessage", context),
@@ -380,6 +410,128 @@ await app.finish();
 assert.equal(app.state.history.length, 6);
 const thirdChat = app.requests.filter(r => r.path === "/api/chat")[2];
 assert.equal(JSON.parse(thirdChat.options.body).history.length, 4);
+""")
+
+    def test_reading_older_messages_does_not_jump_on_reply_and_new_answer_restores_latest(self):
+        self.run_javascript(r"""
+await app.send("첫 질문이에요.");
+const delayed = deferred();
+app.respond("/api/chat", () => delayed.promise);
+const sending = app.send("둘째 질문이에요.");
+await app.flush();
+const scroll = app.element("conversation-scroll");
+scroll.scrollTop = 40;
+scroll.dispatchEvent(new Event("scroll"));
+const scrollCalls = scroll.scrollCalls, focusCalls = app.focusCalls();
+delayed.resolve(app.json(app.answer("새 답변입니다.")));
+await sending;
+assert.equal(scroll.scrollTop, 40, "Reading position must not change on delayed reply");
+assert.equal(scroll.scrollCalls, scrollCalls);
+assert.equal(app.focusCalls(), focusCalls, "Do not steal focus while reading");
+assert.equal(app.element("new-answer").hidden, false);
+app.element("new-answer").click();
+assert.equal(scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight);
+assert.equal(app.element("new-answer").hidden, true);
+assert.equal(app.state.history.length, 4);
+app.element("new-chat").click();
+assert.equal(scroll.scrollTop, 0);
+assert.equal(app.element("new-answer").hidden, true);
+assert.equal(app.state.history.length, 0);
+""")
+
+    def test_settings_dialog_pauses_voice_retains_history_and_does_not_restart_on_close(self):
+        self.run_javascript(r"""
+await app.send("기억할 질문입니다.");
+await app.start();
+app.settingsTriggers[0].click();
+assert.equal(app.element("screen-settings").open, true);
+assert.equal(app.voice.active, false);
+assert.equal(app.streams[0].track.stops, 1);
+assert.equal(app.state.history.length, 2);
+assert.equal(app.element("voice-state-icon").getAttribute("href"), "#i-pause");
+app.element("font-large").click();
+assert.equal(app.document.body.classList.contains("large-text"), true);
+app.element("close-settings").click();
+assert.equal(app.element("screen-settings").open, false);
+assert.equal(app.document.activeElement, app.settingsTriggers[0]);
+assert.equal(app.permissions.length, 1, "Closing settings must not resume mic");
+assert.equal(app.state.history.length, 2);
+app.settingsTriggers[1].click();
+assert.equal(app.element("screen-settings").open, true);
+const escape = new Event("keydown", { cancelable: true });
+escape.key = "Escape";
+app.element("screen-settings").dispatchEvent(escape);
+assert.equal(app.element("screen-settings").open, false);
+assert.equal(escape.defaultPrevented, true);
+assert.equal(app.document.activeElement, app.settingsTriggers[1]);
+""")
+
+    def test_topics_navigation_aligns_the_section_opens_library_and_preserves_conversation(self):
+        self.run_javascript(r"""
+await app.send("이어갈 대화입니다.");
+const scroll = app.element("conversation-scroll");
+scroll.rectTop = 64;
+scroll.scrollTop = 100;
+app.element("topics").rectTop = 200;
+app.element("health-library").hidden = false;
+app.element("health-library").open = false;
+const requests = app.requests.length;
+app.navLinks[1].click();
+assert.equal(scroll.scrollTop, 216, "Align topics inside the conversation scroller");
+assert.equal(app.element("health-library").open, true);
+assert.equal(app.document.activeElement, app.element("topics"));
+assert.equal(app.element("current-section-title").textContent, "함께 알아보기");
+assert.equal(app.element("topics-title").textContent, "함께 알아보기");
+assert.equal(app.navLinks[1].getAttribute("aria-current"), "location");
+assert.equal(app.requests.length, requests, "Navigation must not send a sample question");
+assert.equal(app.state.history.length, 2);
+app.navLinks[0].click();
+assert.equal(scroll.scrollTop, scroll.scrollHeight - scroll.clientHeight);
+assert.equal(app.element("current-section-title").textContent, "온담과 대화하기");
+assert.equal(app.state.history.length, 2);
+app.element("health-library").open = false;
+app.location.hash = "#topics";
+app.lifecycle.dispatchEvent(new Event("hashchange"));
+assert.equal(app.element("health-library").open, true);
+assert.equal(app.navLinks[1].getAttribute("aria-current"), "location");
+assert.equal(app.requests.length, requests);
+""")
+
+    def test_settings_cancel_pending_permission_before_its_late_resolution(self):
+        self.run_javascript(r"""
+app.element("mode-voice").click();
+await app.flush();
+assert.equal(app.permissions.length, 1);
+app.settingsTriggers[0].click();
+await app.grant();
+assert.equal(app.voice.active, false);
+assert.equal(app.streams[0].track.stops, 1);
+assert.equal(app.element("screen-settings").open, true);
+assert.equal(app.voice.recorder, null);
+app.element("close-settings").click();
+assert.equal(app.permissions.length, 1);
+""")
+
+    def test_visual_viewport_height_and_offset_update_without_new_audio_requests(self):
+        self.run_javascript(r"""
+assert.equal(app.document.documentElement.style["--app-height"], "700px");
+app.visualViewport.height = 350;
+app.visualViewport.offsetTop = 60;
+app.visualViewport.dispatchEvent(new Event("resize"));
+assert.equal(app.document.documentElement.style["--app-height"], "350px");
+assert.equal(app.document.documentElement.style["--app-top"], "60px");
+app.visualViewport.offsetTop = 0;
+app.visualViewport.dispatchEvent(new Event("scroll"));
+assert.equal(app.document.documentElement.style["--app-top"], "0px");
+assert.equal(app.document.documentElement.getAttribute("data-viewport-size"), "compact");
+app.visualViewport.height = 250;
+app.visualViewport.dispatchEvent(new Event("resize"));
+assert.equal(app.document.documentElement.getAttribute("data-viewport-size"), "tiny");
+app.visualViewport.height = 800;
+app.visualViewport.dispatchEvent(new Event("resize"));
+assert.equal(app.document.documentElement.getAttribute("data-viewport-size"), "regular");
+assert.equal(app.permissions.length, 0);
+assert.equal(app.requests.length, 0);
 """)
 
     def test_microphone_visual_tracks_actual_input_not_a_decorative_sound_animation(self):
@@ -823,7 +975,7 @@ assert.equal(app.voice.context, null);
 assert.equal(app.element("error").hidden, false);
 if (typeof recognized === "string" && recognized.length > 2000) {
   assert.equal(app.element("voice-transcript").textContent, recognized);
-  app.element("voice-to-text").click();
+  app.element("mode-text").click();
   assert.equal(app.element("message").value, recognized, "Never silently truncate recognition");
   assert.equal(app.element("chat-form").hidden, false);
   app.element("message").value = "고친 내용";

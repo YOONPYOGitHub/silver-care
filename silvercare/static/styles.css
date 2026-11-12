@@ -144,3 +144,80 @@ body.large-text .bubble{font-size:var(--body-size)}
 @media(max-width:700px){.mode-buttons{max-width:none}.mode-buttons button{padding:12px 8px;font-size:16px}.voice-panel{padding:24px 16px}.voice-controls button{flex:1 1 120px}.voice-panel h2{font-size:19px}}
 .large-text .topic-card strong,.large-text .setting-row strong{font-size:19px}
 .large-text .topic-card>span:not(.topic-icon):not(.card-arrow),.large-text .setting-row small,.large-text .source-link,.large-text .message-notice,.large-text .trust-card ul,.large-text .family-examples,.large-text .voice-privacy{font-size:16px}
+
+/* The dock is a grid row, so controls never cover the scrollable conversation. */
+html,body{height:100%;overflow:hidden}
+.app-shell{position:fixed;top:var(--app-top,0px);left:0;width:100%;height:var(--app-height,100dvh);min-height:0;overflow:hidden}
+.sidebar{position:static;inset:auto;height:100%}
+.workspace{margin-left:0;flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.topbar{flex:0 0 64px;height:64px;padding:0 28px}
+.topbar-right{gap:10px}
+.topbar-settings{display:none;place-items:center;min-height:44px;min-width:44px;background:transparent;color:var(--green);border-radius:8px}
+.compact-emergency{display:none;align-items:center;justify-content:center;min-width:44px;min-height:44px;border-radius:8px;color:#8e4937;font-size:14px;font-weight:650}
+.content-grid{flex:1;min-height:0;width:100%;max-width:1450px;padding:0 24px;gap:24px;overflow:hidden}
+.main-content{display:grid;grid-template-rows:minmax(0,1fr) auto;min-height:0;overflow:hidden}
+.conversation-scroll{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;padding:24px 12px 24px 4px;scroll-padding-block:20px}
+.conversation-scroll:focus-visible{outline:2px solid #bc8944;outline-offset:-3px}
+.right-panel{position:static;top:auto;align-self:stretch;max-height:none;min-height:0;height:100%;overflow-y:auto;overscroll-behavior:contain;padding:24px 0}
+.conversation-dock{position:relative;margin:0;padding:12px 4px max(10px,env(safe-area-inset-bottom));border-top:1px solid #dfe7d9;background:#f7f8f4;min-height:0;max-height:min(320px,calc(var(--app-height,100dvh) - 100px));overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.conversation-dock .conversation-mode{display:flex;align-items:center;gap:14px;margin:0 0 10px}
+.conversation-dock .mode-buttons{flex:0 1 350px;max-width:350px;width:100%;padding:3px;gap:4px}
+.conversation-dock .mode-buttons button{padding:8px 14px;min-height:44px;font-size:15px;white-space:nowrap}
+.conversation-dock .conversation-mode>p{margin:0;flex:1;font-size:12px;line-height:1.6}
+.conversation-dock .composer-hint{margin-bottom:6px;line-height:1.6}
+.conversation-dock .composer{margin:0}
+.conversation-dock .composer textarea{max-height:120px}
+.conversation-dock .composer-footer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;margin:6px 0 0;padding:0}
+.conversation-dock .ai-disclaimer{font-size:12px;line-height:1.65}
+.conversation-dock .info-link{font-size:12px;min-height:44px;padding:4px}
+.conversation-dock .key-hint{display:none}
+.conversation-dock .error-banner{margin:6px 0;font-size:13px;line-height:1.6;max-height:80px;overflow-y:auto}
+.conversation-dock .audio-panel{margin:6px 0;gap:6px;flex-wrap:wrap}
+.conversation-dock .audio-panel audio{flex:1;min-width:150px;max-width:100%;height:40px}
+.new-answer{display:block;min-height:44px;max-width:100%;padding:8px 16px;margin:0 auto 8px;border:1px solid #bdd0b4;border-radius:24px;background:#e6efdf;color:#285d49;font-size:14px;box-shadow:0 2px 6px #27452c0a}
+.conversation-dock .voice-panel{display:grid;grid-template-columns:52px minmax(0,1fr);column-gap:14px;text-align:left;padding:10px 14px;margin:0;border-radius:14px}
+.conversation-dock .voice-orb{grid-column:1;grid-row:1/span 2;width:40px;height:40px;margin:8px 6px 0}
+.conversation-dock .voice-orb svg{width:24px;height:24px}
+.conversation-dock .voice-orb::before,.conversation-dock .voice-orb::after{inset:-5px}
+.conversation-dock .voice-state-label{grid-column:2;grid-row:1;margin:0;font-size:16px;line-height:1.6}
+.conversation-dock .voice-input-feedback{grid-column:2;grid-row:2;display:flex;align-items:center;gap:8px;margin:0;min-height:24px}
+.conversation-dock .voice-input-meter{height:22px;gap:4px;flex-shrink:0}
+.conversation-dock .voice-input-meter span{width:5px;height:12px}
+.conversation-dock .voice-input-meter span:nth-child(2),.conversation-dock .voice-input-meter span:nth-child(4){height:17px}
+.conversation-dock .voice-input-meter span:nth-child(3){height:22px}
+.conversation-dock .voice-input-label{font-size:11px;line-height:1.5;margin:0}
+.conversation-dock .voice-processing{grid-column:2;grid-row:2;justify-content:flex-start;min-height:22px;margin:0}
+.conversation-dock .voice-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.conversation-dock .voice-panel[data-voice-phase=paused] .voice-status{position:static;grid-column:1/-1;width:auto;height:auto;clip-path:none;font-size:12px;line-height:1.65;margin:6px 0 0;max-height:3.3em;overflow-y:auto}
+.conversation-dock .voice-controls{grid-column:1/-1;justify-content:flex-start;gap:8px;margin:8px 0 0}
+.conversation-dock .voice-controls button{flex:1 1 0;min-height:44px;padding:8px 10px;font-size:14px;line-height:1.6}
+.large-text .conversation-dock .voice-state-label{font-size:18px}
+.large-text .conversation-dock .mode-buttons button,.large-text .conversation-dock .voice-controls button{font-size:17px}
+.large-text .conversation-dock .voice-status,.large-text .conversation-dock .voice-input-label{font-size:14px}
+.large-text .conversation-dock .ai-disclaimer{font-size:14px}
+#screen-settings{width:min(480px,calc(100% - 32px));max-height:85dvh;padding:24px;overflow-y:auto}
+.settings-description,.settings-help p{font-size:14px;line-height:1.85;color:#52644f}
+#screen-settings .font-setting{margin:20px 0;padding:16px 0;border-block:1px solid var(--line)}
+.settings-help{margin-top:12px;color:#405b48;font-size:14px}
+.settings-help summary{padding:12px 0;min-height:44px;cursor:pointer}
+.large-text .settings-description,.large-text .settings-help{font-size:16px}
+@media(max-width:1250px){.content-grid{padding:0 18px;gap:18px;grid-template-columns:minmax(0,1fr) 246px}}
+@media(max-width:1050px){.content-grid{max-width:none;grid-template-columns:minmax(0,1fr);padding:0 22px}.right-panel{display:none}.compact-emergency{display:flex}.topbar{padding:0 22px}.conversation-dock .conversation-mode>p{display:none}}
+@media(max-width:700px){.sidebar{display:none}.workspace{width:100%}.topbar{flex-basis:58px;height:58px;padding:0 12px}.topbar-right{gap:2px}.content-grid{padding:0 12px}.conversation-scroll{padding:18px 4px}.conversation-dock{padding-inline:0}.conversation-dock .conversation-mode{margin-bottom:8px}.conversation-dock .mode-buttons{flex:1;max-width:none}.conversation-dock .composer-hint{font-size:11px}.conversation-dock .voice-controls button{flex:1 1 0}.conversation-dock .voice-panel{column-gap:10px;padding:9px 10px}.conversation-dock .audio-panel>span{display:none}.status{max-width:115px;overflow:hidden;text-overflow:ellipsis}}
+@media(max-width:700px){.topbar-settings{display:grid}}
+@media(max-height:550px){.topbar{height:48px;flex-basis:48px}.conversation-dock{padding-top:6px;padding-bottom:max(4px,env(safe-area-inset-bottom))}.conversation-dock .conversation-mode{margin-bottom:5px}.conversation-dock .composer-hint{display:none}.conversation-dock .voice-status{max-height:1.65em;margin-top:3px}.conversation-dock .voice-controls{margin-top:5px}.new-answer{margin-bottom:4px}.conversation-dock .mode-buttons button{padding-block:5px}.conversation-dock .voice-panel{padding-block:6px}}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .topbar{height:48px;flex-basis:48px}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock{padding-top:6px;padding-bottom:max(4px,env(safe-area-inset-bottom))}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .conversation-mode{margin-bottom:5px}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .conversation-mode>p,html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .composer-hint{display:none}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .mode-buttons button{padding-block:5px}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .voice-panel{padding-block:6px}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .voice-controls{margin-top:5px}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .composer textarea{max-height:clamp(41px,calc(var(--app-height,100dvh) - 320px),90px)}
+html:is([data-viewport-size=compact],[data-viewport-size=tiny]) .conversation-dock .voice-panel[data-voice-phase=paused] .voice-status{max-height:1.65em}
+html[data-viewport-size=tiny] .conversation-dock{max-height:calc(var(--app-height,100dvh) - 80px)}
+html[data-viewport-size=tiny] .conversation-dock .composer-footer,html[data-viewport-size=tiny] .conversation-dock .voice-input-label{display:none}
+html[data-viewport-size=tiny] .conversation-dock .voice-panel{padding-block:4px}
+html[data-viewport-size=tiny] .conversation-dock .voice-state-label{font-size:16px}
+html[data-viewport-size=tiny] .conversation-dock .voice-input-feedback{min-height:20px}
+html[data-viewport-size=tiny] .conversation-dock .voice-panel[data-voice-phase=paused] .voice-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
