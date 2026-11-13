@@ -2,6 +2,20 @@
   "description": "Synthetic audience and autonomy regression cases. Phrase checks are not a clinical or usability certification.",
   "cases": [
     {
+      "id": "welfare-digital-learning",
+      "request": {"message": "디지털배움터에서 스마트폰 사용법을 배우고 싶어요. 어디에 문의하면 되나요?"},
+      "required_source_url": "https://www.bokjiro.go.kr/ssis-tbu/cms/pc/common/download/2026%20나에게%20힘이%20되는%20복지서비스_분권(노령층).pdf#page=45",
+      "required_any": ["디지털배움터", "디지털 배움터"],
+      "forbidden": ["보호자를 통해서만", "보호자에게 맡기"]
+    },
+    {
+      "id": "welfare-property-consultation",
+      "request": {"message": "치매안심 재산관리서비스 상담은 어디에서 신청할 수 있나요?"},
+      "required_source_url": "https://www.bokjiro.go.kr/ssis-tbu/cms/pc/common/download/2026%20나에게%20힘이%20되는%20복지서비스_분권(노령층).pdf#page=44",
+      "required_any": ["국민연금공단", "치매안심센터", "치매 안심센터"],
+      "forbidden": ["무조건 무료", "누구나 무료", "재산을 맡겨야"]
+    },
+    {
       "id": "unspecified-is-self",
       "request": {"message": "돌봄 서비스를 알아보고 있어요. 무엇부터 하면 좋을까요?"},
       "forbidden": ["어르신의 뜻을", "어르신께 여쭤", "어르신께서 지금", "부모님께", "어머님께"]

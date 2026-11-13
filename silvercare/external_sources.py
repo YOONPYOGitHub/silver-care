@@ -27,6 +27,9 @@ from urllib.parse import quote, quote_plus, unquote, urlencode, urljoin, urlspli
 from xml.etree import ElementTree as ET
 
 import httpx
+import pdfplumber
+from pdfminer.pdfexceptions import PDFException
+from pdfplumber.utils.exceptions import PdfminerException
 
 from silvercare.config import DataSourceSettings
 from silvercare.data import SearchDocument, chunks
@@ -39,6 +42,41 @@ FAQ_129_PAGE = "https://www.129.go.kr/faq/faq05.do"
 MOHW_129_GUIDE = (
     "https://www.mohw.go.kr/board.es?mid=a10503010100&bid=0027&act=view&list_no=1485141"
 )
+WELFARE_SENIOR_PAGE = (
+    "https://www.mohw.go.kr/board.es?mid=a10411010300&bid=0019&act=view&list_no=1491341"
+)
+WELFARE_SENIOR_PDF = (
+    "https://www.bokjiro.go.kr/ssis-tbu/cms/pc/common/download/"
+    "2026%20나에게%20힘이%20되는%20복지서비스_분권(노령층).pdf"
+)
+WELFARE_SENIOR_SHA256 = "74cde38350d49bb767c2bb217022a3ff17e1021cec36966534963e9c4e269bd5"
+# These sections have merged columns or diagrams in this specific, checksummed edition.
+WELFARE_SENIOR_TABLES = {
+    "대상": frozenset({"02", "08", "09", "10", "11", "12", "23"}),
+    "내용": frozenset(
+        {
+            "01",
+            "02",
+            "04",
+            "07",
+            "08",
+            "11",
+            "12",
+            "14",
+            "15",
+            "17",
+            "18",
+            "20",
+            "23",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30",
+            "32",
+        }
+    ),
+}
 KDCA_VIEW = (
     "https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/"
     "gnrlzHealthInfo/gnrlzHealthInfoView.do"
@@ -66,7 +104,7 @@ API_DOCS = {
     "nhis-detail": "15058856",
 }
 DEFAULT_PROVIDERS = ("mohw-care-2026", "medlineplus", *API_DOCS)
-PUBLIC_PROVIDERS = ("129-faq", "kdca-older-adults", "mohw-129-guidance")
+PUBLIC_PROVIDERS = ("129-faq", "kdca-older-adults", "mohw-129-guidance", "mohw-welfare-senior-2026")
 ALL_PROVIDERS = (*DEFAULT_PROVIDERS, *PUBLIC_PROVIDERS)
 PUBLIC_REUSE_NOTICES = {
     "129-faq": {
@@ -416,6 +454,135 @@ def mohw_129_records(data: bytes) -> list[Record]:
     ]
 
 
+def welfare_senior_permission(data: bytes) -> str:
+    scopes = [
+        node for node in SourceHTML(data).root.elements() if node.attrs.get("id") == "contents_body"
+    ]
+    articles = [
+        node
+        for scope in scopes
+        for node in scope.elements()
+        if node.tag == "article" and node.has_class("board_view")
+    ]
+    if len(scopes) != 1 or len(articles) != 1:
+        raise CollectionError("article_identity", "Expected one MOHW welfare publication article")
+    article = articles[0]
+    titles = [node.text() for node in article.elements() if node.tag == "h2"]
+    areas = [node for node in article.elements() if node.has_class("contents")]
+    stamp = re.search(r"작성일\s*:?\s*(\d{4}-\d{2}-\d{2})", article.text())
+    updated = source_date(stamp[1]) if stamp else ""
+    if (
+        len(titles) != 1
+        or re.sub(r"\s+", "", titles[0]) != "2026나에게힘이되는복지서비스"
+        or len(areas) != 1
+        or updated != "2026-07-19"
+    ):
+        raise CollectionError("article_identity", "Welfare guide identity or posting date changed")
+    body = re.sub(r"\s+", "", areas[0].text())
+    if not all(
+        term in body
+        for term in (
+            "노령층",
+            "이책을활용하여자체제작이가능",
+            "이미지",
+            "공공의목적이외",
+            "상업용이나판매용으로사용할수없",
+        )
+    ):
+        raise CollectionError(
+            "reuse_permission_required", "Edition-specific text reuse notice is missing"
+        )
+    return updated
+
+
+def welfare_senior_records(data: bytes, updated: str) -> list[Record]:
+    if len(data) > MAX_DOWNLOAD or hashlib.sha256(data).hexdigest() != WELFARE_SENIOR_SHA256:
+        raise CollectionError(
+            "guide_revision", "Welfare PDF changed; review its layout and rights before refreshing"
+        )
+    if updated != "2026-07-19":
+        raise CollectionError("missing_source_date", "Verified publication date is required")
+    try:
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            if len(pdf.pages) != 48:
+                raise CollectionError("guide_layout", "Expected the verified 48-page senior guide")
+            texts = [normalize(page.extract_text() or "") for page in pdf.pages]
+            if not all(
+                term in texts[46]
+                for term in (
+                    "보건복지부",
+                    "한국사회보장정보원",
+                    "11-1352000-100665-10",
+                    "인쇄 2026년 6월 30일",
+                )
+            ):
+                raise CollectionError("guide_identity", "Welfare guide imprint is missing")
+            entries = re.findall(r"(?m)^(\d{2})\s+(.+?)\s+(\d{1,2})$", "\n".join(texts[3:5]))
+            starts = [int(entry[2]) for entry in entries]
+            if (
+                [entry[0] for entry in entries] != [f"{i:02}" for i in range(1, 36)]
+                or starts != sorted(set(starts))
+                or starts[0] != 6
+                or starts[-1] != 46
+            ):
+                raise CollectionError(
+                    "guide_contents", "Expected 35 ordered, unique service entries"
+                )
+            records = []
+            for index, (number, title, first_page) in enumerate(entries):
+                last_page = starts[index + 1] - 1 if index + 1 < len(entries) else 46
+                pages = f"{first_page}–{last_page}" if int(first_page) != last_page else first_page
+                body = "\n".join(texts[int(first_page) - 1 : last_page])
+                body = re.sub(
+                    r"(?m)^(?:\d+\s+2026 나에게 힘이 되는 복지서비스|노령층\s+\d+)\s*$",
+                    "",
+                    body,
+                )
+                if number == "05":
+                    # The verified table's rightmost column is application/contact text only.
+                    body = "\n".join(
+                        normalize(pdf.pages[p].crop((378, top, 541, 790)).extract_text() or "")
+                        for p, top in ((10, 240), (11, 108))
+                    )
+                    selected = ["신청·문의(분야별 대상·감면액 표는 원문 확인):\n" + body]
+                else:
+                    markers = list(re.finditer(r"(?m)^I\s*(대상|내용|방법|문의)\s*", body))
+                    labels = [match[1] for match in markers]
+                    expected = ["대상", "내용", "방법"] + ([] if number == "06" else ["문의"])
+                    if labels != expected:
+                        raise CollectionError("guide_sections", "Service section order changed")
+                    selected = []
+                    for i, match in enumerate(markers):
+                        section = body[
+                            match.end() : markers[i + 1].start() if i + 1 < len(markers) else None
+                        ].strip()
+                        section = re.split(
+                            r"(?m)^(?:알려드립니다|자주 하는 질문|✔)", section, maxsplit=1
+                        )[0].strip()
+                        if not section:
+                            raise CollectionError("guide_sections", "Service section is empty")
+                        if number in WELFARE_SENIOR_TABLES.get(match[1], frozenset()):
+                            section = "표·도식의 세부 조건과 금액은 원문에서 확인해 주세요."
+                        selected.append(match[1] + ":\n" + section)
+                text = f"원문 쪽 범위: {pages}\n\n" + "\n\n".join(selected)
+                if not 30 <= len(text) <= 15000:
+                    raise CollectionError("guide_sections", "Service text exceeds verified bounds")
+                records.append(
+                    Record(
+                        f"welfare-2026-{number}",
+                        title,
+                        text,
+                        WELFARE_SENIOR_PDF + f"#page={first_page}",
+                        year="2026",
+                        updated=updated,
+                        audience="provider" if number == "22" else "self",
+                    )
+                )
+            return records
+    except (PDFException, PdfminerException):
+        raise CollectionError("invalid_pdf", "Welfare guide PDF could not be parsed") from None
+
+
 def faq_129_records(data: bytes) -> list[Record]:
     elements = list(SourceHTML(data).root.elements())
     by_id = {element.attrs["id"]: element for element in elements if element.attrs.get("id")}
@@ -755,7 +922,17 @@ def document_records(
     for record in records:
         if not safe_url(record.url):
             raise CollectionError("invalid_provenance", "Missing or unsafe public provenance URL")
-        text = redact(record.text)
+        contacts: dict[str, str] = {}
+        text = record.text
+        if dataset == "mohw-welfare-senior-2026":
+            # Only preserve publisher-marked institutional landlines, never personal mobile numbers.
+            for contact in dict.fromkeys(re.findall(r"☎\s*0[2-6]\d?[- ]\d{3,4}[- ]\d{4}", text)):
+                marker = f"[공식문의{len(contacts)}]"
+                contacts[marker] = contact
+                text = text.replace(contact, marker)
+        text = redact(text)
+        for marker, contact in contacts.items():
+            text = text.replace(marker, contact)
         digest = hashlib.sha256(text.encode()).hexdigest()
         if digest in seen:
             duplicate_count += 1
@@ -770,6 +947,15 @@ def document_records(
                     "incomplete_faq", "FAQ question context is missing or too long"
                 )
             parts = (prefix + part for part in chunks(answer, size=1600 - len(prefix), overlap=160))
+        elif dataset == "mohw-welfare-senior-2026":
+            prefix = (
+                f"2026 노령층 복지서비스 · {record.title}\n"
+                "출처: 보건복지부·한국사회보장정보원. 인쇄일 2026-06-30, 게시일 2026-07-19.\n"
+                f"원문 쪽: {record.url.split('#page=')[-1]}. "
+                "금액·가구별 조건의 복잡한 표·도식·이미지·FAQ는 미수록. "
+                "개인별 자격을 확정하지 말고 적용 연도와 현행 조건을 담당 기관에 확인하세요.\n"
+            )
+            parts = (prefix + part for part in chunks(text, size=1600 - len(prefix), overlap=160))
         else:
             parts = chunks(text, size=1600, overlap=160)
         for part in parts:
@@ -1308,6 +1494,34 @@ def collect(
                 license_text = (
                     "공공누리 제1유형(출처표시), 보건복지부 2025, 게시물 1485141; "
                     "본문 텍스트 정제·분할, 첨부·이미지 제외"
+                )
+            elif provider == "mohw-welfare-senior-2026":
+                page, _ = collector.fetch(report, WELFARE_SENIOR_PAGE, "welfare-senior-notice.html")
+                updated = welfare_senior_permission(page)
+                data, _ = collector.fetch(report, WELFARE_SENIOR_PDF, "welfare-senior-2026.pdf")
+                records = welfare_senior_records(data, updated)
+                agency = "보건복지부 · 한국사회보장정보원"
+                license_text = (
+                    "보건복지부 게시물1491341: 책 활용 자체 제작 허용 안내; "
+                    "출처 표시, 텍스트만 정제·분할, 별도 제한된 이미지 제외"
+                )
+                report.notes.extend(
+                    [
+                        f"Verified 48-page PDF SHA256 {WELFARE_SENIOR_SHA256}; "
+                        "35 services; printed2026-06-30, posted2026-07-19; "
+                        "not a current eligibility check.",
+                        "Edition-specific reuse permission checked in the publisher article body. "
+                        "No inference of blanket KOGL/commercial-image rights.",
+                        "Service TOC/page spans, ordinary target/benefit text, application/contact "
+                        "sections retained. Seven target and19 benefit table/diagram sections "
+                        "omitted rather than flattening merged columns. Discount guide uses "
+                        "only the verified application/contact column. Cover, TOC, imagery, "
+                        "FAQ and imprint not indexed.",
+                        "Employer-only continued-employment grant tagged provider; "
+                        "other entries self. "
+                        "Publisher-marked institutional landlines retained; "
+                        "personal patterns redacted.",
+                    ]
                 )
             elif provider == "kdca-older-adults":
                 records = collector.kdca_older_adults(report)

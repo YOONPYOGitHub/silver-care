@@ -1,6 +1,6 @@
 # 실행·수집·배포·검증
 
-코드·릴리스 설정 확인 기준일: 2026-11-12.
+자료·릴리스 설정 확인 기준일: 2026-11-13.
 프로젝트 루트에서 실행한다. 구조는 [아키텍처](architecture.md), 데이터 의미는 [RAG·API](rag.md)를 따른다.
 
 ## 1. 설정과 비밀값
@@ -90,6 +90,9 @@ uv run python -m silvercare.corpus fetch --max-mb 20
 uv run python -m silvercare.external_sources \
   --providers mohw-care-2026 medlineplus welfare-central nhis-search mohw-129-guidance
 
+# 확인한 노령층 안내서만 추가·갱신한다. 다른 provider 자료는 보존한다.
+uv run python -m silvercare.external_sources --providers mohw-welfare-senior-2026
+
 # 직접 작성한 기관 안내와 등록 corpus를 준비한다.
 uv run python -m silvercare.data prepare \
   --manifest data/reference.json --output data/processed/reference.jsonl
@@ -100,6 +103,10 @@ uv run python -m silvercare.expanded prepare \
 `expanded prepare`에서 `--external`을 빼면 외부 지식이 준비 결과에 들어가지 않는다.
 원본·manifest·수집 응답을 먼저 점검하고 통계·출처·개인정보·평가 분리를 검토한다.
 수집기의 기본 provider 목록에는 지자체·기관 상세가 포함되고 129 이용안내는 별도 선택이다.
+노령층 안내서 `mohw-welfare-senior-2026`도 명시적으로 선택한다.
+수집기는 보건복지부 본문의 책 활용 허용·이미지 제한, 게시일, 고정 PDF hash와 구조를 확인한다.
+지원 내용·대상의 복잡한 표/도식은 원문 확인 안내로 대체하며 그 범위를 수집 보고서에 남긴다.
+원본이 바뀌면 hash를 무조건 새 값으로 바꾸지 말고 이용조건·목차·절/문의 열을 다시 검토한다.
 전체 기본 수집이 일부 실패할 수 있으므로 종료 코드와 `external-collection-report.json`을 확인한다.
 
 기관 상세는 검색 결과의 기관 ID가 필요하므로 `--providers nhis-search nhis-detail`처럼 선택한다.
@@ -115,11 +122,11 @@ CLI는 HTTP 오류를 실패로 보고하므로 필요하면 공식 웹 파일 �
 
 **활성 인덱스를 대상으로 아래 작업을 바로 실행하지 않는다.**
 `expanded.py`의 `KNOWLEDGE_INDEX`·`CASE_INDEX`는 발행 대상 이름이다.
-코드 상수와 활성 릴리스는 모두 `v4`이므로 새 corpus를 발행하려면 먼저
+코드 상수와 활성 릴리스는 모두 `v5`이므로 새 corpus를 발행하려면 먼저
 두 발행 대상을 사용하지 않는 버전 이름으로 지정해야 한다.
 목표 이름을 바꾸는 CLI 옵션이나 자동 blue/green 이름 생성은 구현되어 있지 않다.
 
-예를 들어 검토한 발행 대상이 `silvercare-knowledge-v5`, `silvercare-cases-v5`라면:
+예를 들어 검토한 발행 대상이 `silvercare-knowledge-v6`, `silvercare-cases-v6`라면:
 
 1. 코드의 두 발행 상수를 해당 미사용 이름으로 설정한다.
 2. `AZURE_SEARCH_INDEX`·`AZURE_SEARCH_CASE_INDEX`는 발행 시점의 활성 인덱스를 가리키게 한다. 발행기는 이 설정과 같은 endpoint의 `release.json`에 기록된 지식·사례 인덱스를 모두 보호한다.
@@ -130,8 +137,8 @@ CLI는 HTTP 오류를 실패로 보고하므로 필요하면 공식 웹 파일 �
 ```bash
 # 위 1~2단계의 발행 대상 검토가 끝난 경우에만 실행한다.
 export AZURE_SEARCH_ENDPOINT=https://silvercare-rag-2a5aalbg7ugfc.search.windows.net
-export AZURE_SEARCH_INDEX=silvercare-knowledge-v4
-export AZURE_SEARCH_CASE_INDEX=silvercare-cases-v4
+export AZURE_SEARCH_INDEX=silvercare-knowledge-v5
+export AZURE_SEARCH_CASE_INDEX=silvercare-cases-v5
 export AZURE_EMBEDDING_DEPLOYMENT=silvercare-embedding
 export EMBEDDING_DIMENSIONS=512
 export RETRIEVAL_MODE=hybrid
@@ -140,8 +147,8 @@ export SEMANTIC_RANKING=true
 uv run python -m silvercare.expanded publish
 
 # 평가·릴리스는 검토한 새 버전 대상으로 실행한다.
-export AZURE_SEARCH_INDEX=silvercare-knowledge-v5
-export AZURE_SEARCH_CASE_INDEX=silvercare-cases-v5
+export AZURE_SEARCH_INDEX=silvercare-knowledge-v6
+export AZURE_SEARCH_CASE_INDEX=silvercare-cases-v6
 uv run python -m silvercare.evaluate \
   --queries data/retrieval-evaluation.json \
   --output data/processed/expanded/retrieval-evaluation-final.json
@@ -264,13 +271,13 @@ uv run python -m silvercare.evaluate \
 
 ### 검증 결과와 한계
 
-검색·답변·음성 수치는 2026-11-11 처리 보고서의 측정값이다.
+검색·답변은 노령층 안내서 추가 후 `v5` 처리 보고서, 음성은 2026-11-11 측정 보고서의 수치다.
 프론트엔드 상태·취소·접근성 검증은 코드 변경에 맞춰 실행하며 영구적 품질 보장이 아니다.
 
 | 평가 | 결과 | 보고서 |
 | --- | --- | --- |
-| 고정 12질문 검색 | 키워드 Hit@6 4/12, hybrid 10/12, hybrid MRR@6 0.542 | `retrieval-evaluation-final.json` |
-| 본인/보호자·129·질병관리청 답변 | 14/14, 질병관리청 4질문은 실제 원문 URL 인용 필수 | `audience-evaluation.json` |
+| 고정 16질문 검색 | 키워드 Hit@6 8/16, hybrid 14/16, hybrid MRR@6 0.698. 추가 복지 4질문은 모두 1위 | `retrieval-evaluation-final.json` |
+| 본인/보호자·복지·129·질병관리청 답변 | 16/16. 복지 2질문은 해당 PDF 쪽 링크, 질병관리청 4질문은 실제 원문 URL 인용 필수 | `audience-evaluation.json` |
 | 텍스트·음성 상태 전이 | 모드 전환·자동 재청취·취소·입력 막대·상태 표시·읽기 경로 | `tests/test_frontend.py` |
 | 대화 조작부·설정 | 스크롤 추적·지연 응답·화면 높이·dialog 일시정지/포커스·DOM 구조 | `tests/test_frontend.py`, `tests/test_layout.py` |
 | 음성 인식 | 62세 1화자·6발화·34.755초, CER 4/77=5.19%, WER 6/28=21.43% | `speech-evaluation.json` |

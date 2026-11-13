@@ -53,7 +53,7 @@ AKS LoadBalancer → Caddy → FastAPI
 - `.runtime/deployment.json`: 배포 URL·이미지·클러스터·검색 endpoint의 로컬 상태다.
 
 기본 템플릿의 Free 검색을 운영 검색으로 오해하지 않는다.
-운영 인덱스는 `silvercare-knowledge-v4`, `silvercare-cases-v4`이며 앱은 릴리스 설정으로 선택한다.
+운영 인덱스는 `silvercare-knowledge-v5`, `silvercare-cases-v5`이며 앱은 릴리스 설정으로 선택한다.
 별도 Free 검색의 파일럿 인덱스는 운영 답변에 사용하지 않는다.
 이미지 태그와 인덱스 이름은 서로 독립적이다.
 

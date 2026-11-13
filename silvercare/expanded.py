@@ -17,8 +17,8 @@ from silvercare.data import SearchDocument, care_audience, index_schema, prepare
 from silvercare.privacy import normalize, redact
 
 OUTPUT = Path("data/processed/expanded")
-KNOWLEDGE_INDEX = "silvercare-knowledge-v4"
-CASE_INDEX = "silvercare-cases-v4"
+KNOWLEDGE_INDEX = "silvercare-knowledge-v5"
+CASE_INDEX = "silvercare-cases-v5"
 # AI Hub 86 data guide, page 10; source and document hash are recorded in the RAG guide.
 AGE_GROUPS = {
     "A01": "adolescent",
