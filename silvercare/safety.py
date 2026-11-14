@@ -11,6 +11,10 @@ MEDICAL_CAUTION = (
     "답변만으로 질환을 판단하거나 약의 복용량·중단 여부, 검사 필요성을 결정하지 마세요. "
     "개인에게 맞는 판단은 의사·약사 등 의료전문가와 상의해 주세요."
 )
+MEDICAL_DISPLAY_NOTICE = (
+    "AI 답변은 참고용이며 오류가 있을 수 있어요. "
+    "답변만으로 진단·복약 변경·검사 여부를 결정하지 말고 의료진과 상의해 주세요."
+)
 MEDICAL_CONTEXT = re.compile(
     r"약물|의약품|복약|복용|투약|처방|검사|검진|치료|진단|증상|질환"
     r"|통증|당뇨|치매|혈압|혈당|부작용|용량|아스피린|인슐린|초음파"
@@ -31,6 +35,28 @@ EMERGENCY = re.compile(
 
 def medical_caution(message: str, answer: str) -> str | None:
     return MEDICAL_CAUTION if MEDICAL_CONTEXT.search(message + "\n" + answer) else None
+
+
+def answer_display_notice(
+    notice: str,
+    caution: str | None,
+    *,
+    dataset_cited: bool,
+    has_sources: bool,
+) -> str:
+    if not caution:
+        return notice
+    if caution != MEDICAL_CAUTION:
+        return f"{notice} {caution}"
+    parts = [MEDICAL_DISPLAY_NOTICE]
+    if dataset_cited:
+        parts.append(
+            "일부 자료는 전문가 검토 전의 자동 정리본이며, "
+            "AI Hub 링크는 원문이 아닌 데이터셋 안내입니다."
+        )
+    if not has_sources:
+        parts.append("인용된 참고자료는 없습니다.")
+    return " ".join(parts)
 
 
 def emergency_response(message: str) -> ChatResponse | None:

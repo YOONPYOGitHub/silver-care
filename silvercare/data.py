@@ -20,6 +20,7 @@ from silvercare.archives import MAX_MEMBER, source_files
 from silvercare.azure import SEARCH_API, AzureServices
 from silvercare.config import DataSourceSettings, get_settings
 from silvercare.privacy import normalize, redact
+from silvercare.retrieval import Domain, Jurisdiction, Language, SourceType
 
 logger = logging.getLogger(__name__)
 AIHUB_BASE = "https://api.aihub.or.kr"
@@ -84,6 +85,13 @@ class SearchDocument(BaseModel):
     audience: Literal["general", "self", "caregiver", "provider"] = "general"
     age_code: str = ""
     age_group: str = "unknown"
+    domain: Domain = "general"
+    source_type: SourceType = "reference"
+    source_language: Language = "unknown"
+    jurisdiction: Jurisdiction = "unspecified"
+    parent_id: str = ""
+    chunk_index: int = Field(default=0, ge=0)
+    drug_entities: list[str] = Field(default_factory=list)
 
 
 class MedicalSource(BaseModel):
@@ -396,8 +404,15 @@ def index_schema(name: str, vector_dimensions: int | None = None) -> dict[str, A
                     "audience",
                     "age_code",
                     "age_group",
+                    "domain",
+                    "source_type",
+                    "source_language",
+                    "jurisdiction",
+                    "parent_id",
                 )
             ],
+            {"name": "chunk_index", "type": "Edm.Int32", "filterable": True, "sortable": True},
+            {"name": "drug_entities", "type": "Collection(Edm.String)", "filterable": True},
         ],
     }
     if vector_dimensions is not None:

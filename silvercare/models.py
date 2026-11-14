@@ -24,6 +24,18 @@ class ChatRequest(BaseModel):
         return value.strip()
 
 
+WHO_REUSE_NOTICE = (
+    "출처: World Health Organization, Integrated care for older people (ICOPE), second edition, "
+    "ISBN 9789240103726. © WHO 2024; publication page: 2025-09-22. "
+    "원문: CC BY-NC-SA 3.0 IGO, https://creativecommons.org/licenses/by-nc-sa/3.0/igo/. "
+    "발췌·정제·한국어 번역·요약 부분: CC BY-NC-SA 4.0, "
+    "https://creativecommons.org/licenses/by-nc-sa/4.0/, 비상업적 이용. "
+    "This is an adaptation/translation of the original work. It was not created by WHO. "
+    "WHO is not responsible for its content or accuracy. "
+    "The original English edition is the binding and authentic edition. No WHO endorsement."
+)
+
+
 class Source(BaseModel):
     id: int
     title: str
@@ -34,6 +46,13 @@ class Source(BaseModel):
     record_id: str = ""
     source_display: str = ""
     source_year: str = ""
+    license: str = ""
+    license_url: str = ""
+    reuse_notice: str = ""
+    source_type: str = ""
+    source_language: str = ""
+    jurisdiction: str = ""
+    context_record_ids: list[str] = Field(default_factory=list)
 
 
 class HealthTopic(BaseModel):
@@ -66,6 +85,7 @@ class ChatResponse(BaseModel):
     mode: Literal["grounded", "conversation", "emergency"]
     notice: str
     medical_caution: str | None = None
+    display_notice: str = ""
     health_topics: list[HealthTopic] = Field(default_factory=list)
 
 

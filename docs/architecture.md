@@ -32,7 +32,7 @@ AKS LoadBalancer → Caddy → FastAPI
 | 역할 | 리소스·설정 | 소유 범위 |
 | --- | --- | --- |
 | 서비스 리소스 그룹 | `rg-silver-care`, Korea Central | AKS·ACR·검색·관리 ID |
-| AKS | `aks-silvercare`, `Standard_D2ds_v5` 노드 1개 | 앱·Caddy·공개 Service |
+| AKS | `aks-silvercare`, `Standard_D2ds_v5` 운영 노드 2개 | 앱·Caddy·공개 Service. 기본 템플릿은 1개 |
 | 컨테이너 레지스트리 | `silvercare2a5aalbg7ugfc` | ACR Basic |
 | 앱 관리 ID | `silvercare-app` | AKS Workload Identity |
 | 운영 검색 | `silvercare-rag-2a5aalbg7ugfc` | Basic, replica 1 / partition 1, semantic Standard |
@@ -53,7 +53,12 @@ AKS LoadBalancer → Caddy → FastAPI
 - `.runtime/deployment.json`: 배포 URL·이미지·클러스터·검색 endpoint의 로컬 상태다.
 
 기본 템플릿의 Free 검색을 운영 검색으로 오해하지 않는다.
-운영 인덱스는 `silvercare-knowledge-v5`, `silvercare-cases-v5`이며 앱은 릴리스 설정으로 선택한다.
+운영 인덱스는 `silvercare-knowledge-v8`, `silvercare-cases-v8`이며 앱은 릴리스 설정으로 선택한다.
+`PREFER_OFFICIAL_REFERENCES=true`는 공식 안내 후보 2개를 우선 확보하고 실행 API 근거를 먼저 배치한다.
+`NONCOMMERCIAL_DATA_USE=true`는 운영자가 확인한 WHO 자료의 비상업적 이용을 기록한다.
+이 확인 없이 WHO 문서를 발행하거나 검색 결과를 생성 모델에 전달할 수 없다.
+`CONTEXTUAL_RETRIEVAL=true`는 v8 메타데이터 기반 검색·부모 문맥 결합·명시적인 일상 대화의
+검색 생략을 켠다. 기본값은 `false`이며 이전 인덱스에서 켜지 않는다.
 별도 Free 검색의 파일럿 인덱스는 운영 답변에 사용하지 않는다.
 이미지 태그와 인덱스 이름은 서로 독립적이다.
 
@@ -73,6 +78,8 @@ AKS LoadBalancer → Caddy → FastAPI
 | [data.py](../silvercare/data.py) | 원천 스키마·문서 타입·정제·검색 스키마·개별 파일 CLI |
 | [corpus.py](../silvercare/corpus.py) | 등록된 AI Hub 파일의 다운로드·receipt·준비 CLI |
 | [external_sources.py](../silvercare/external_sources.py) | 공식 문서·XML·복지/기관 API 수집·출처·부분 실패 보고 |
+| [clinical_sources.py](../silvercare/clinical_sources.py) | WHO·VA·FDA·openFDA의 제한된 수집·판본/권한 확인·표/라벨 구조 보관 |
+| [retrieval.py](../silvercare/retrieval.py) | 원천 분류·보수적 질문 범위·약명 별칭·부모 문맥 결합·근거에 등장한 용어 대응 |
 | [expanded.py](../silvercare/expanded.py) | 지식·사례·holdout 구성·임베딩 캐시·버전 인덱스 발행·릴리스 검증 |
 | [evaluate.py](../silvercare/evaluate.py) | 검색·실제 답변·음성 평가 |
 | [static/](../silvercare/static/) | HTML·CSS·JavaScript·화면 이미지 |
@@ -96,6 +103,9 @@ AKS LoadBalancer → Caddy → FastAPI
 
 앱 셸은 화면 높이에 맞고, `conversation-scroll`과 `conversation-dock`은 서로 다른 grid 행이다.
 환영·주제·메시지·출처는 `conversation-scroll`에서 스크롤하며 모드 선택·입력·음성 상태·조작은 하단에 남는다.
+입력창·음성 상태·오류·재생 영역은 `dock-content`에 두고, 그 아래 모드 선택과 공통 이용 안내는
+별도의 고정 행으로 둔다. 모드 전환이나 음성 처리 상태로 내용 높이가 바뀌어도 선택 버튼의 위치·크기는 유지한다.
+낮은 화면에서 내용이 넘치면 `dock-content`만 스크롤하며 모드 선택은 남는다.
 고정 요소를 메시지 위에 덮는 방식이 아니므로 메시지 영역과 조작부가 겹치지 않는다.
 `visualViewport`의 높이·offset과 safe-area를 적용하며 가상 키보드가 열리면 조작부 높이와 위치를 조정한다.
 작은 화면이나 낮은 창에서는 보조 설명과 입력창 최대 높이를 줄이고 필수 모드·입력·멈춤 버튼을 유지한다.
@@ -109,11 +119,19 @@ AI 주의·개인정보 상세 안내는 별도 이용 안내에 있고 답변 �
 화면 설정과 별도의 이용 안내·119 안내도 대화 이력을 지우지 않는다.
 좁은 화면에서는 데스크톱 보조 패널 대신 상단 설정·119 안내를 사용한다.
 
-사용자가 과거 메시지를 읽으면 자동 스크롤·입력 포커스 이동을 멈춘다.
-새 답변은 `new-answer` 버튼으로 안내하며 누르면 최신 위치로 이동한다.
-새 질문을 직접 보내거나 ‘돌봄 대화’ 메뉴를 선택하면 최신 위치로 이동한다.
+새 답변은 해당 메시지의 시작을 읽기 위치로 삼는다. 긴 답변의 출처·주의·공식 자료가 본문 아래에
+붙어 있어도 페이지 맨 아래로 이동하지 않는다. 짧은 답변은 가능한 스크롤 범위 안에서 표시한다.
+화면·키보드·입력창·메시지 크기가 변하면 레이아웃 반영 후 같은 답변 시작을 유지한다.
+높이 변화 자체를 사용자의 과거 대화 탐색으로 취급하지 않는다.
+터치·휠·키보드로 직접 읽는 위치를 옮기면 자동 위치 맞춤과 입력 포커스 이동을 멈춘다.
+공식 자료를 펼칠 때도 읽기 위치를 유지하며 본문 시작이나 문서 끝으로 강제로 이동하지 않는다.
+첫 방문·새 대화는 환영 위치를 유지하고 주제 메뉴는 자동으로 최신 대화로 되돌리지 않는다.
+다른 대화를 읽는 동안 온 답변은 `new-answer` 버튼으로 안내하며 누르면 새 답변 시작으로 이동한다.
+새 질문을 보내면 대기 메시지를 표시하고, ‘돌봄 대화’ 메뉴는 가장 최근 메시지의 시작으로 이동한다.
 ‘함께 알아보기’는 주제 상단을 대화 스크롤 영역에 맞추고 공식 건강정보 목록을 펼치며 제목·선택 메뉴를 바꾼다.
 메뉴 클릭·`#topics` 직접 접속·hash 변경 모두 같은 위치 이동을 사용하며 대화 이력을 지우거나 질문을 자동 전송하지 않는다.
+공식 건강정보 선택기는 좁은 화면에서 라벨을 위에 두고 주제 선택과 원문 보기 버튼을 같은 행에 배치한다.
+선택 열은 가용 폭 안에서 줄어들며, 긴 주제명이나 큰 글씨 때문에 버튼이 다음 행으로 밀리지 않는다.
 
 텍스트·음성 모드는 현재 브라우저 탭의 `state.history`를 공유한다.
 최근 12개 이전 메시지만 현재 질문과 함께 전달하며, 화면에 보이는 모든 과거 메시지가 모델 입력에 남는 것은 아니다.

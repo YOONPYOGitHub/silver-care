@@ -15,10 +15,16 @@ from silvercare.config import Settings, get_settings
 from silvercare.corpus import CorpusCatalog
 from silvercare.data import SearchDocument, care_audience, index_schema, prepare
 from silvercare.privacy import normalize, redact
+from silvercare.retrieval import (
+    drug_entities,
+    parent_identity,
+    source_profile,
+    source_topic,
+)
 
 OUTPUT = Path("data/processed/expanded")
-KNOWLEDGE_INDEX = "silvercare-knowledge-v5"
-CASE_INDEX = "silvercare-cases-v5"
+KNOWLEDGE_INDEX = "silvercare-knowledge-v8"
+CASE_INDEX = "silvercare-cases-v8"
 # AI Hub 86 data guide, page 10; source and document hash are recorded in the RAG guide.
 AGE_GROUPS = {
     "A01": "adolescent",
@@ -163,7 +169,27 @@ def write_documents(path: Path, documents: list[SearchDocument]) -> None:
         raise
 
 
-def prepare_expanded(external_path: Path | None) -> dict[str, Any]:
+def annotate_documents(documents: list[SearchDocument]) -> None:
+    positions: Counter[str] = Counter()
+    for document in documents:
+        profile = source_profile(document.dataset_id, document.evidence_kind)
+        document.domain = profile.domain
+        document.source_type = profile.source_type
+        document.source_language = profile.source_language
+        document.jurisdiction = profile.jurisdiction
+        record = document.source_record_id or document.id
+        document.parent_id = parent_identity(document.dataset_id, document.source_file_key, record)
+        explicit = re.search(r":chunk-(\d+)$", record)
+        document.chunk_index = int(explicit[1]) if explicit else positions[document.parent_id]
+        positions[document.parent_id] = document.chunk_index + 1
+        document.drug_entities = list(drug_entities(document.title))
+        if not document.topic:
+            document.topic = source_topic(profile, document.title)
+
+
+def prepare_expanded(
+    external_path: Path | None, clinical_path: Path | None = None
+) -> dict[str, Any]:
     catalog = CorpusCatalog.model_validate_json(Path("data/catalog.json").read_text())
     knowledge: list[SearchDocument] = []
     for source in catalog.sources:
@@ -176,6 +202,8 @@ def prepare_expanded(external_path: Path | None) -> dict[str, Any]:
     knowledge.extend(load_documents(Path("data/processed/reference.jsonl")))
     if external_path is not None:
         knowledge.extend(load_documents(external_path))
+    if clinical_path is not None:
+        knowledge.extend(load_documents(clinical_path))
     for document in knowledge:
         if document.dataset_id == "mohw-care-2026" and document.audience == "general":
             document.audience = care_audience(document.title)
@@ -187,6 +215,8 @@ def prepare_expanded(external_path: Path | None) -> dict[str, Any]:
             selected.append(document)
             seen.add(digest)
     cases, evaluation, counts = case_documents(catalog)
+    for corpus in (selected, cases, evaluation):
+        annotate_documents(corpus)
     write_documents(OUTPUT / "knowledge.jsonl", selected)
     write_documents(OUTPUT / "cases.jsonl", cases)
     write_documents(OUTPUT / "evaluation.jsonl", evaluation)
@@ -198,6 +228,11 @@ def prepare_expanded(external_path: Path | None) -> dict[str, Any]:
         "knowledge_by_dataset": dict(Counter(d.dataset_id for d in selected)),
         "risk_levels": dict(Counter(d.risk_level for d in selected)),
         "knowledge_by_audience": dict(Counter(d.audience for d in selected)),
+        "knowledge_by_source_type": dict(Counter(d.source_type for d in selected)),
+        "knowledge_by_domain": dict(Counter(d.domain for d in selected)),
+        "knowledge_by_language": dict(Counter(d.source_language for d in selected)),
+        "knowledge_by_jurisdiction": dict(Counter(d.jurisdiction for d in selected)),
+        "knowledge_parent_records": len({d.parent_id for d in selected}),
         "dialogue_by_age_code": dict(
             Counter(d.age_code for d in cases if d.evidence_kind == "dialogue")
         ),
@@ -276,6 +311,18 @@ def validate_publish_target(
     )
     if any(document.evidence_kind not in allowed for document in documents):
         raise ValueError("Prepared evidence kinds do not match the staging index")
+    if (
+        any(document.dataset_id == "who-icope-2025" for document in documents)
+        and not settings.noncommercial_data_use
+    ):
+        raise ValueError("WHO publication requires confirmed noncommercial data use")
+    if settings.contextual_retrieval:
+        if any(not document.parent_id for document in documents):
+            raise ValueError("Contextual retrieval requires annotated parent metadata")
+        if len({(document.parent_id, document.chunk_index) for document in documents}) != len(
+            documents
+        ):
+            raise ValueError("Duplicate chunk positions within a source parent")
 
 
 async def upload(
@@ -395,6 +442,8 @@ async def publish() -> None:
         "endpoint": services.settings.azure_search_endpoint.rstrip("/"),
         "embedding_deployment": services.settings.azure_embedding_deployment,
         "dimensions": services.settings.embedding_dimensions,
+        "noncommercial_data_use": services.settings.noncommercial_data_use,
+        "contextual_retrieval": services.settings.contextual_retrieval,
         "indexes": {},
     }
     try:
@@ -438,6 +487,9 @@ async def release() -> None:
         if (
             report["embedding_deployment"] != services.settings.azure_embedding_deployment
             or report["dimensions"] != services.settings.embedding_dimensions
+            or report.get("noncommercial_data_use", False)
+            != services.settings.noncommercial_data_use
+            or report.get("contextual_retrieval", False) != services.settings.contextual_retrieval
         ):
             raise ValueError(
                 "Published embedding configuration does not match release configuration"
@@ -449,6 +501,12 @@ async def release() -> None:
             or quality.get("knowledge_sha256") != report["indexes"][KNOWLEDGE_INDEX]["sha256"]
             or quality["hybrid_pipeline"]["rewrite_queries"] != services.settings.rewrite_queries
             or quality["hybrid_pipeline"]["semantic_ranking"] != services.settings.semantic_ranking
+            or quality["hybrid_pipeline"].get("prefer_official_references", False)
+            != services.settings.prefer_official_references
+            or quality["hybrid_pipeline"].get("noncommercial_data_use", False)
+            != services.settings.noncommercial_data_use
+            or quality["hybrid_pipeline"].get("contextual_retrieval", False)
+            != services.settings.contextual_retrieval
         ):
             raise ValueError("Verified retrieval evaluation does not match this release")
         if (
@@ -465,6 +523,11 @@ async def release() -> None:
             or audience.get("case_index") != CASE_INDEX
             or audience.get("official_health_enabled")
             != bool(services.settings.kdca_health_api_key.get_secret_value())
+            or audience.get("prefer_official_references", False)
+            != services.settings.prefer_official_references
+            or audience.get("noncommercial_data_use", False)
+            != services.settings.noncommercial_data_use
+            or audience.get("contextual_retrieval", False) != services.settings.contextual_retrieval
         ):
             raise ValueError("Verified audience response evaluation does not match this release")
         base = services.settings.azure_search_endpoint
@@ -504,6 +567,9 @@ async def release() -> None:
             "EMBEDDING_DIMENSIONS": str(services.settings.embedding_dimensions),
             "REWRITE_QUERIES": str(services.settings.rewrite_queries).lower(),
             "SEMANTIC_RANKING": str(services.settings.semantic_ranking).lower(),
+            "PREFER_OFFICIAL_REFERENCES": str(services.settings.prefer_official_references).lower(),
+            "NONCOMMERCIAL_DATA_USE": str(services.settings.noncommercial_data_use).lower(),
+            "CONTEXTUAL_RETRIEVAL": str(services.settings.contextual_retrieval).lower(),
         }
         path = OUTPUT / "release.json"
         path.write_text(json.dumps(settings, indent=2))
@@ -517,10 +583,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build and publish the expanded hybrid RAG corpus")
     parser.add_argument("command", choices=["prepare", "publish", "release"])
     parser.add_argument("--external", type=Path)
+    parser.add_argument("--clinical", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "prepare":
-            print(json.dumps(prepare_expanded(args.external), ensure_ascii=False, indent=2))
+            print(
+                json.dumps(
+                    prepare_expanded(args.external, args.clinical),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
         elif args.command == "publish":
             asyncio.run(publish())
         else:

@@ -64,6 +64,105 @@ async def test_keyword_comparison_does_not_call_embeddings():
         await services.close()
 
 
+async def test_official_reference_preference_preserves_six_slots_and_reuses_vector():
+    calls = []
+
+    def row(identity, kind):
+        return {"id": identity, "evidence_kind": kind}
+
+    def handler(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if body["filter"] == "evidence_kind eq 'reference'":
+            assert body["top"] == 2
+            return httpx.Response(
+                200, json={"value": [row("official", "reference"), row("shared", "reference")]}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "value": [
+                    row("dataset1", "dataset_knowledge"),
+                    row("shared", "reference"),
+                    *(row(f"dataset{i}", "dataset_knowledge") for i in range(2, 6)),
+                ]
+            },
+        )
+
+    service = make_services(handler)
+    service.settings.prefer_official_references = True
+    try:
+        result = await service.search("빈혈", "reference", [0.1] * 512, mode="hybrid")
+        assert [row["id"] for row in result] == [
+            "official",
+            "shared",
+            "dataset1",
+            "dataset2",
+            "dataset3",
+            "dataset4",
+        ]
+        assert len(calls) == 2
+        assert calls[0]["vectorQueries"] == calls[1]["vectorQueries"]
+    finally:
+        await service.close()
+
+
+async def test_official_preference_does_not_hide_source_pool_failures():
+    def handler(request):
+        body = json.loads(request.content)
+        if body["filter"] == "evidence_kind eq 'reference'":
+            return httpx.Response(503)
+        return httpx.Response(
+            200, json={"value": [{"id": "dataset", "evidence_kind": "dataset_knowledge"}]}
+        )
+
+    service = make_services(handler)
+    service.settings.prefer_official_references = True
+    try:
+        with pytest.raises(UpstreamError):
+            await service.search("빈혈", "reference", mode="keyword")
+    finally:
+        await service.close()
+
+
+async def test_who_search_requires_noncommercial_confirmation_and_logs_failure(caplog):
+    service = make_services(
+        lambda _: httpx.Response(
+            200, json={"value": [{"id": "who", "dataset_id": "who-icope-2025"}]}
+        )
+    )
+    try:
+        with pytest.raises(UpstreamError):
+            await service.search("노인 기능 저하", "reference")
+        assert "noncommercial" in caplog.text
+        service.settings.noncommercial_data_use = True
+        assert (await service.search("노인 기능 저하", "reference"))[0]["id"] == "who"
+    finally:
+        await service.close()
+
+
+def test_publishing_who_material_requires_noncommercial_confirmation(tmp_path, monkeypatch):
+    from silvercare.config import Settings
+    from silvercare.expanded import validate_publish_target
+
+    monkeypatch.setattr(expanded, "OUTPUT", tmp_path)
+    document = SearchDocument(
+        id="who",
+        title="WHO",
+        content="Synthetic reference text",
+        source_url="https://www.who.int/publications/i/item/9789240103726",
+        dataset_id="who-icope-2025",
+        evidence_kind="reference",
+        license="CC BY-NC-SA",
+        updated_at="2025-09-22",
+    )
+    settings = Settings(_env_file=None)
+    with pytest.raises(ValueError, match="noncommercial"):
+        validate_publish_target(settings, KNOWLEDGE_INDEX, [document])
+    settings.noncommercial_data_use = True
+    validate_publish_target(settings, KNOWLEDGE_INDEX, [document])
+
+
 @pytest.mark.parametrize(
     "data",
     [

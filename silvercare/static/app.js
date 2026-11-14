@@ -5,6 +5,7 @@ const state = {
   history: [], busy: false, config: null, mode: "text", chat: null,
   audioURL: null, speaking: false, audioGeneration: 0, audioRequest: null,
 };
+const reuseNotices = new Set();
 const voice = {
   active: false, generation: 0, phase: "paused", status: null, context: null, output: null,
   stream: null, recorder: null, input: null, analyser: null, timer: null,
@@ -29,8 +30,13 @@ const VOICE_PHASE_LABELS = {
 };
 const AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
 const initialMessages = $("messages").cloneNode(true);
-let followConversation = true;
+let followConversation = false;
 let activeSection = "#conversation";
+let scrollGeometry = null;
+let followFrame = null;
+let userScrollPending = false;
+let followedMessage = null;
+let followedScrollTop = null;
 $("today").textContent = new Intl.DateTimeFormat("ko-KR", {
   month: "long", day: "numeric", weekday: "long",
 }).format(new Date());
@@ -177,6 +183,24 @@ function healthTopicCard(topic) {
   return card;
 }
 
+function registerReuseNotice(source) {
+  if (!source.reuse_notice || reuseNotices.has(source.reuse_notice)) return;
+  reuseNotices.add(source.reuse_notice);
+  const notice = document.createElement("p");
+  notice.className = "source-reuse-notice";
+  notice.textContent = source.reuse_notice;
+  if (source.license_url?.startsWith("https://creativecommons.org/licenses/")) {
+    const license = document.createElement("a");
+    license.href = source.license_url;
+    license.target = "_blank";
+    license.rel = "noopener noreferrer";
+    license.textContent = " 이용조건 확인";
+    notice.append(license);
+  }
+  $("source-reuse-notices").append(notice);
+  $("source-reuse-info").hidden = false;
+}
+
 function addMessage(role, text, result = null) {
   const article = document.createElement("article");
   article.className = `message ${role}${result?.mode === "emergency" ? " emergency" : ""}`;
@@ -219,30 +243,31 @@ function addMessage(role, text, result = null) {
         link.title = source.excerpt + provenance;
         link.append(icon("external"));
         sources.append(link);
+        registerReuseNotice(source);
       });
       body.append(sources);
     }
-    const notice = document.createElement("div");
-    notice.className = "message-notice";
-    notice.textContent = result.notice;
-    body.append(notice);
     if (result.medical_caution) {
       const caution = document.createElement("aside");
       caution.className = "medical-caution";
       caution.setAttribute("role", "note");
       const heading = document.createElement("strong");
-      heading.textContent = "건강정보 이용 안내";
+      heading.textContent = "답변 이용 안내";
       const content = document.createElement("p");
-      content.textContent = result.medical_caution;
+      content.textContent = result.display_notice || result.medical_caution;
       caution.append(heading, content);
       body.append(caution);
+    } else {
+      const notice = document.createElement("div");
+      notice.className = "message-notice";
+      notice.setAttribute("role", "note");
+      notice.textContent = result.display_notice || result.notice;
+      body.append(notice);
     }
     if (result.health_topics?.length) {
       const originals = document.createElement("aside");
       originals.className = "health-references";
-      const heading = document.createElement("p");
-      heading.textContent = "함께 확인할 공식 자료예요. 진단 결과나 개인별 권고는 아니에요.";
-      originals.append(heading);
+      originals.setAttribute("aria-label", "관련 공식 건강정보");
       result.health_topics.forEach((topic) => { originals.append(healthTopicCard(topic)); });
       body.append(originals);
     }
@@ -265,17 +290,90 @@ function scrollMessageIntoView(element, force = false) {
     $("new-answer").hidden = false;
     return;
   }
-  const scroller = $("conversation-scroll");
-  scroller.scrollTo({ top: scroller.scrollHeight, behavior: "instant" });
   followConversation = true;
+  userScrollPending = false;
+  followedMessage = element;
   $("new-answer").hidden = true;
+  alignConversationForReading();
+  scheduleConversationFollow();
+}
+
+function alignConversationForReading() {
+  const scroller = $("conversation-scroll");
+  const top = followedMessage?.parentNode === $("messages")
+    ? followedMessage.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      + scroller.scrollTop - 16
+    : scroller.scrollHeight;
+  followedScrollTop = Math.max(0, Math.min(top, scroller.scrollHeight - scroller.clientHeight));
+  scroller.scrollTo({ top: followedScrollTop, behavior: "instant" });
+  rememberScrollGeometry();
+}
+
+function rememberScrollGeometry() {
+  const scroller = $("conversation-scroll");
+  scrollGeometry = { height: scroller.clientHeight, content: scroller.scrollHeight };
+}
+
+function scheduleConversationFollow() {
+  if (followFrame !== null) return;
+  followFrame = requestAnimationFrame(() => {
+    followFrame = null;
+    if (followConversation) {
+      alignConversationForReading();
+    }
+    rememberScrollGeometry();
+  });
 }
 
 $("conversation-scroll").addEventListener("scroll", () => {
   const scroller = $("conversation-scroll");
-  followConversation = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 72;
+  const resized = scrollGeometry && (
+    scrollGeometry.height !== scroller.clientHeight || scrollGeometry.content !== scroller.scrollHeight
+  );
+  const userScrolled = userScrollPending;
+  userScrollPending = false;
+  rememberScrollGeometry();
+  if (resized && !userScrolled) {
+    scheduleConversationFollow();
+    return;
+  }
+  if (!userScrolled && followConversation && followedScrollTop !== null
+      && Math.abs(scroller.scrollTop - followedScrollTop) <= 2) return;
+  followedMessage = null;
+  followedScrollTop = null;
+  followConversation = activeSection !== "#topics"
+    && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 72;
   if (followConversation) $("new-answer").hidden = true;
 }, { passive: true });
+function pauseConversationFollow() {
+  followConversation = false;
+  followedMessage = null;
+  followedScrollTop = null;
+}
+
+function markUserScroll() {
+  userScrollPending = true;
+  pauseConversationFollow();
+}
+
+for (const name of ["wheel", "touchmove"]) {
+  $("conversation-scroll").addEventListener(name, markUserScroll, { passive: true });
+}
+$("conversation-scroll").addEventListener("pointerdown", (event) => {
+  if (event.target === $("conversation-scroll")) markUserScroll();
+}, { passive: true });
+$("conversation-scroll").addEventListener("keydown", (event) => {
+  if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+    markUserScroll();
+  }
+});
+$("messages").addEventListener("toggle", pauseConversationFollow, true);
+rememberScrollGeometry();
+if (globalThis.ResizeObserver) {
+  const observer = new ResizeObserver(scheduleConversationFollow);
+  observer.observe($("conversation-scroll"));
+  observer.observe($("messages"));
+}
 $("new-answer").addEventListener("click", () => {
   scrollMessageIntoView($("messages").lastElementChild, true);
 });
@@ -288,7 +386,9 @@ function updateAppViewport() {
   document.documentElement.setAttribute(
     "data-viewport-size", viewport.height < 300 ? "tiny" : viewport.height <= 550 ? "compact" : "regular"
   );
+  scheduleConversationFollow();
 }
+addEventListener("resize", scheduleConversationFollow, { passive: true });
 globalThis.visualViewport?.addEventListener("resize", updateAppViewport, { passive: true });
 globalThis.visualViewport?.addEventListener("scroll", updateAppViewport, { passive: true });
 updateAppViewport();
@@ -307,6 +407,8 @@ function setActiveSection(href) {
 }
 
 function showTopics(focus = true) {
+  pauseConversationFollow();
+  userScrollPending = false;
   if (!$("health-library").hidden) $("health-library").open = true;
   const scroller = $("conversation-scroll");
   const target = $("topics");
@@ -376,6 +478,8 @@ async function sendMessage(text, voiceToken = null) {
   const loadingMessage = $("messages").lastElementChild;
   const chat = { controller: new AbortController(), userMessage, loadingMessage, voiceToken, value };
   state.chat = chat;
+  setActiveSection("#conversation");
+  userScrollPending = false;
   scrollMessageIntoView($("messages").lastElementChild, true);
   let result;
   try {
@@ -423,6 +527,7 @@ $("message").addEventListener("keydown", (event) => {
 $("message").addEventListener("input", () => {
   $("message").style.height = "auto";
   $("message").style.height = `${Math.min($("message").scrollHeight, 160)}px`;
+  scheduleConversationFollow();
 });
 document.querySelectorAll("[data-prompt]").forEach((button) => {
   button.addEventListener("click", () => { void sendMessage(button.dataset.prompt); });
@@ -835,7 +940,7 @@ $("new-chat").addEventListener("click", () => {
   setActiveSection("#conversation");
   history.replaceState(null, "", location.pathname + location.search);
   $("conversation-scroll").scrollTo({ top: 0, behavior: "instant" });
-  followConversation = true;
+  pauseConversationFollow();
 });
 for (const size of ["normal", "large"]) {
   $(`font-${size}`).addEventListener("click", () => {

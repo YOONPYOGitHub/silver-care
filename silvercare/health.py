@@ -42,6 +42,7 @@ class Topic:
     id: str
     title: str
     pattern: str
+    exclude_pattern: str = ""
 
     def public(self) -> HealthTopic:
         return HealthTopic(id=self.id, title=self.title, url=SOURCE + self.id)
@@ -51,12 +52,26 @@ TOPICS = (
     Topic("6752", "건강노화", r"건강노화|건강한 노후|건강하게 지내"),
     Topic("6722", "근 손실", r"근 손실|근손실|근감소"),
     Topic("1743", "낙상", r"낙상|넘어지|넘어질"),
-    Topic("6698", "노인 고혈압", r"고혈압|혈압"),
+    Topic(
+        "6698",
+        "노인 고혈압",
+        r"고혈압|혈압",
+        r"^(?!.*고혈압).*(?:저혈압|혈압.{0,8}(?:낮|떨어))",
+    ),
     Topic("5306", "노인 당뇨병", r"당뇨|혈당"),
     Topic("2447", "노인 변비", r"변비"),
     Topic("6695", "노인 보행장애", r"보행장애|걷기 어렵|걷기가 어렵|보행이 불편"),
-    Topic("5314", "노인 삼킴장애", r"삼킴|삼키기|삼키기가|연하장애"),
-    Topic("5428", "노인 약물복용", r"약물|복약|복용|(?<![가-힣])약(?:을|은|이|의|\s|$)"),
+    Topic(
+        "5314",
+        "노인 삼킴장애",
+        r"삼킴|삼키기|연하장애|연하곤란|사레|음식.{0,12}목에.{0,10}(?:걸리|걸려|걸린)",
+    ),
+    Topic(
+        "5428",
+        "노인 약물복용",
+        r"약물|복약|복용|혈압약|감기약|당뇨약|처방약|"
+        r"(?<![가-힣])약(?:을|은|이|의|과|도|하고|\s|$)",
+    ),
     Topic("6766", "노인 어지럼증", r"어지럼|어지러"),
     Topic("5783", "노인 요실금", r"요실금|소변이 새|소변을 참기"),
     Topic("5489", "노인성 난청", r"난청|잘 안 들|보청기"),
@@ -78,12 +93,20 @@ BY_ID = {topic.id: topic for topic in TOPICS}
 
 
 def select_topics(message: str, history: list[Message]) -> list[HealthTopic]:
-    matches = [topic.public() for topic in TOPICS if re.search(topic.pattern, message)]
+    def matching(text: str) -> list[HealthTopic]:
+        return [
+            topic.public()
+            for topic in TOPICS
+            if re.search(topic.pattern, text)
+            and not (topic.exclude_pattern and re.search(topic.exclude_pattern, text))
+        ]
+
+    matches = matching(message)
     if matches:
         return matches[:3]
     if re.fullmatch(r"\s*(?:이거|그거|그 내용|더|좀 더|자세히)[^\n]{0,20}", message):
         previous = next((item.content for item in reversed(history) if item.role == "user"), "")
-        return [topic.public() for topic in TOPICS if re.search(topic.pattern, previous)][:3]
+        return matching(previous)[:3]
     return []
 
 

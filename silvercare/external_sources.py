@@ -38,6 +38,21 @@ from silvercare.privacy import normalize, redact
 MOHW_PAGE = "https://www.mohw.go.kr/board.es?mid=a10411010100&bid=0019&act=view&list_no=1491777"
 MOHW_DOWNLOAD = "https://www.mohw.go.kr/boardDownload.es?bid=0019&list_no=1491777&seq=3"
 MEDLINE_PAGE = "https://medlineplus.gov/xml.html"
+FDA_POLICY = "https://www.fda.gov/about-fda/about-website/website-policies"
+FDA_MEDICINE_PAGES = (
+    (
+        "older-adult-safety",
+        "5 Medication Safety Tips for Older Adults",
+        "노인 약물 안전·상호작용·노화에 따른 간과 신장의 약물 처리",
+        "https://www.fda.gov/consumers/consumer-updates/5-medication-safety-tips-older-adults",
+    ),
+    (
+        "medication-list",
+        "Create and Keep a Medication List for Your Health",
+        "복용 약·일반약·보충제 목록 관리",
+        "https://www.fda.gov/consumers/consumer-updates/create-and-keep-medication-list-your-health",
+    ),
+)
 FAQ_129_PAGE = "https://www.129.go.kr/faq/faq05.do"
 MOHW_129_GUIDE = (
     "https://www.mohw.go.kr/board.es?mid=a10503010100&bid=0027&act=view&list_no=1485141"
@@ -104,7 +119,13 @@ API_DOCS = {
     "nhis-detail": "15058856",
 }
 DEFAULT_PROVIDERS = ("mohw-care-2026", "medlineplus", *API_DOCS)
-PUBLIC_PROVIDERS = ("129-faq", "kdca-older-adults", "mohw-129-guidance", "mohw-welfare-senior-2026")
+PUBLIC_PROVIDERS = (
+    "129-faq",
+    "kdca-older-adults",
+    "mohw-129-guidance",
+    "mohw-welfare-senior-2026",
+    "fda-older-adult-medicines",
+)
 ALL_PROVIDERS = (*DEFAULT_PROVIDERS, *PUBLIC_PROVIDERS)
 PUBLIC_REUSE_NOTICES = {
     "129-faq": {
@@ -140,33 +161,93 @@ PUBLIC_REUSE_NOTICES = {
 # or unrelated Spanish topics. Selection is reproducible across daily archives.
 MEDLINE_TOPICS = frozenset(
     """Advance Directives|Alzheimer's Caregivers|Alzheimer's Disease|Anxiety|
-Arthritis|Assistive Devices|Balance Problems|Bedsores|Benefits of Exercise|
-Blood Pressure Medicines|Bone Health|Bowel Incontinence|Breathing Problems|
-Bronchitis|Cardiac Rehabilitation|Caregiver Health|Caregivers|Cataract|
+Arthritis|Assistive Devices|Balance Problems|Pressure Sores|Benefits of Exercise|
+Blood Pressure Medicines|Bowel Incontinence|Breathing Problems|
+Chronic Bronchitis|Cardiac Rehabilitation|Caregiver Health|Caregivers|Cataract|
 Cholesterol|Chronic Kidney Disease|Chronic Pain|Constipation|COPD|Coronary Artery Disease|
 Dehydration|Delirium|Dementia|Dental Health|Depression|Diabetes|Diabetes Type 2|
 Diabetic Diet|Diabetic Foot|Diabetic Nerve Problems|Dietary Supplements|
 Dizziness and Vertigo|Drug Reactions|Dry Mouth|Edema|Elder Abuse|
 End of Life Issues|Exercise and Physical Fitness|Exercise for Older Adults|
-Eye Care|Falls|Fatigue|Fiber|Food Safety|Foot Health|Frailty|
-Glaucoma|Grief|Healthy Aging|Healthy Sleep|Hearing Aids|
-Hearing Disorders and Deafness|Heart Attack|Heart Failure|Heart-Healthy Diet|
+Eye Care|Falls|Fatigue|Food Safety|Foot Health|
+Glaucoma|Healthy Aging|Healthy Sleep|Hearing Aids|
+Hearing Disorders and Deafness|Heart Attack|Heart Failure|
 Hemorrhagic Stroke|High Blood Pressure|Hip Injuries and Disorders|Hip Replacement|
-Home Care Services|Hospice Care|How Much Exercise Do I Need?|Immunization|
-Insomnia|Ischemic Stroke|Kidney Diseases|Lewy Body Dementia|Living with Chronic Illness|
-Loneliness|Low Vision|Lung Diseases|Macular Degeneration|Malnutrition|
+Home Care Services|Hospice Care|How Much Exercise Do I Need?|
+Insomnia|Ischemic Stroke|Kidney Diseases|Lewy Body Dementia|Coping with Chronic Illness|
+Lung Diseases|Macular Degeneration|Malnutrition|
 Medical Device Safety|Medicines|Memory|Mental Health|Mobility Aids|
 Nutrition|Nutrition for Older Adults|Nutritional Support|Obesity|Older Adult Health|
 Older Adult Mental Health|Osteoarthritis|Osteoporosis|Pain|Pain Relievers|
 Palliative Care|Parkinson's Disease|Patient Safety|Peripheral Arterial Disease|
-Physical Therapy|Pneumonia|Prediabetes|Preventing Infections|Rehabilitation|
+Pneumonia|Prediabetes|Rehabilitation|
 Rheumatoid Arthritis|Shingles|Skin Aging|Sleep Apnea|Sleep Disorders|
-Social Isolation|Speech and Communication Disorders|Stress|Stroke|
+Speech and Communication Disorders|Stress|Stroke|
 Stroke Rehabilitation|Swallowing Disorders|Taste and Smell Disorders|
 Thyroid Diseases|Tooth Disorders|Tremor|Urinary Incontinence|Urinary Tract Infections|
 Vision Impairment and Blindness|Vitamin D|Vitamins|Walking Problems|Weight Control|
-Wounds and Injuries""".replace("\n", "").split("|")
+Wounds and Injuries|Anemia|Antidepressants|Atrial Fibrillation|Bladder Cancer|
+Breast Cancer|Cancer|Cancer--Living with Cancer|Cancer Chemotherapy|Cancer Immunotherapy|
+Cholesterol Medicines|Colorectal Cancer|Diabetes Medicines|Diabetic Eye Problems|
+Diabetic Heart Disease|Diabetic Kidney Problems|Drug Safety|Enlarged Prostate (BPH)|
+Heart Diseases|Heart Health Tests|Heart Valve Diseases|Heartburn|Hepatitis B|Hepatitis C|
+How to Prevent Heart Disease|How to Prevent High Blood Pressure|Hyperthyroidism|
+Hypothyroidism|Kidney Failure|Kidney Stones|Kidney Tests|Low Blood Pressure|Lung Cancer|
+Mild Cognitive Impairment|Muscle Cramps|Non-Drug Pain Management|Over-the-Counter Medicines|
+Peripheral Nerve Disorders|Prostate Cancer|Prostate Diseases|Skin Cancer|Stomach Cancer|
+Vascular Diseases""".replace("\n", "").split("|")
 )
+MEDLINE_KOREAN_TITLES = {
+    "Anemia": "빈혈",
+    "Antidepressants": "항우울제",
+    "Atrial Fibrillation": "심방세동",
+    "Bladder Cancer": "방광암",
+    "Breast Cancer": "유방암",
+    "Cancer": "암",
+    "Cancer--Living with Cancer": "암과 함께 생활하기",
+    "Cancer Chemotherapy": "항암화학요법",
+    "Cancer Immunotherapy": "암 면역치료",
+    "Cholesterol Medicines": "콜레스테롤 치료제",
+    "Chronic Bronchitis": "만성 기관지염",
+    "Chronic Kidney Disease": "만성 신장질환",
+    "Colorectal Cancer": "대장암",
+    "Coping with Chronic Illness": "만성질환에 대처하기",
+    "Delirium": "섬망",
+    "Diabetes Medicines": "당뇨병 치료제",
+    "Diabetic Eye Problems": "당뇨병과 눈 합병증",
+    "Diabetic Heart Disease": "당뇨병과 심장질환",
+    "Diabetic Kidney Problems": "당뇨병과 신장 합병증",
+    "Drug Safety": "의약품 안전",
+    "Enlarged Prostate (BPH)": "전립선비대증",
+    "Heart Diseases": "심장질환",
+    "Heart Health Tests": "심장 건강 검사",
+    "Heart Valve Diseases": "심장판막질환",
+    "Heartburn": "속쓰림",
+    "Hepatitis B": "B형간염",
+    "Hepatitis C": "C형간염",
+    "How to Prevent Heart Disease": "심장질환 예방",
+    "How to Prevent High Blood Pressure": "고혈압 예방",
+    "Hyperthyroidism": "갑상선기능항진증",
+    "Hypothyroidism": "갑상선기능저하증",
+    "Kidney Failure": "신부전",
+    "Kidney Stones": "신장결석",
+    "Kidney Tests": "신장 기능 검사",
+    "Low Blood Pressure": "저혈압",
+    "Lung Cancer": "폐암",
+    "Malnutrition": "영양불량",
+    "Mild Cognitive Impairment": "경도인지장애",
+    "Muscle Cramps": "근육 경련",
+    "Non-Drug Pain Management": "비약물적 통증 관리",
+    "Over-the-Counter Medicines": "일반의약품",
+    "Peripheral Nerve Disorders": "말초신경질환",
+    "Pressure Sores": "욕창",
+    "Prostate Cancer": "전립선암",
+    "Prostate Diseases": "전립선질환",
+    "Skin Cancer": "피부암",
+    "Stomach Cancer": "위암",
+    "Swallowing Disorders": "삼킴장애·연하장애",
+    "Vascular Diseases": "혈관질환",
+}
 
 
 @dataclass(frozen=True)
@@ -383,6 +464,55 @@ def source_date(value: str) -> str:
         return datetime.strptime(value.strip(), "%Y-%m-%d").date().isoformat()
     except ValueError:
         return ""
+
+
+def fda_medication_records(
+    data: bytes, record_id: str, expected_title: str, topic: str, url: str
+) -> list[Record]:
+    articles = [
+        node
+        for node in SourceHTML(data).root.elements()
+        if node.tag == "article" and node.attrs.get("id") == "main-content"
+    ]
+    if len(articles) != 1:
+        raise CollectionError("article_identity", "Expected one FDA consumer article")
+    elements = list(articles[0].elements())
+    titles = [node.text() for node in elements if node.tag == "h1"]
+    dates = [
+        source_date(node.attrs.get("datetime", "")[:10]) for node in elements if node.tag == "time"
+    ]
+    scopes = [node for node in elements if node.attrs.get("role") == "main"]
+    if titles != [expected_title] or len(scopes) != 1 or len(dates) != 1 or not dates[0]:
+        raise CollectionError("article_identity", "FDA title, body or source date changed")
+    if re.search(r"copyright|©|all rights reserved|used with permission", scopes[0].text(), re.I):
+        raise CollectionError(
+            "reuse_permission_required", "FDA article has a separate rights notice"
+        )
+    sections: list[tuple[str, list[str]]] = [("Overview", [])]
+    for node in scopes[0].children:
+        if not isinstance(node, SourceElement):
+            continue
+        if node.tag in {"h2", "h3"}:
+            sections.append((node.text(), []))
+        elif node.tag in {"p", "ul", "ol"}:
+            text = node.text()
+            if text and text != "Español":
+                sections[-1][1].append(text)
+    if sum(len(text) for _, parts in sections for text in parts) < 1500:
+        raise CollectionError("empty_article", "FDA narrative is missing or unexpectedly short")
+    return [
+        Record(
+            f"{record_id}:{index}",
+            f"{topic} · {expected_title} · {heading}",
+            f"{expected_title}\n{heading}\n" + "\n".join(parts),
+            url,
+            dates[0][:4],
+            dates[0],
+            "self",
+        )
+        for index, (heading, parts) in enumerate(sections)
+        if parts and "Contact FDA" not in heading
+    ]
 
 
 def mohw_129_records(data: bytes) -> list[Record]:
@@ -741,8 +871,10 @@ def medline_records(data: bytes) -> list[Record]:
             )
     if not found_xml or not records:
         raise CollectionError("empty_selection", "No selected English MedlinePlus topics found")
-    if len(records) > 150:
-        raise CollectionError("selection_limit", "MedlinePlus selection exceeded 150 topics")
+    if len(records) > len(MEDLINE_TOPICS):
+        raise CollectionError(
+            "selection_limit", "MedlinePlus selection exceeded its title allowlist"
+        )
     return records
 
 
@@ -938,6 +1070,9 @@ def document_records(
             duplicate_count += 1
             continue
         seen.add(digest)
+        title = record.title
+        if dataset == "medlineplus" and title in MEDLINE_KOREAN_TITLES:
+            title = f"{MEDLINE_KOREAN_TITLES[title]} · {title}"
         parts: Iterator[str]
         if dataset == "129-faq":
             context, separator, answer = text.partition("\nA: ")
@@ -947,6 +1082,14 @@ def document_records(
                     "incomplete_faq", "FAQ question context is missing or too long"
                 )
             parts = (prefix + part for part in chunks(answer, size=1600 - len(prefix), overlap=160))
+        elif dataset == "fda-older-adult-medicines":
+            prefix = (
+                f"미국 FDA 일반 환자교육 · {record.title}\n"
+                f"원문 Content current as of: {record.updated}. "
+                "한국의 의약품 허가·보험 기준이나 개인별 처방 지침을 뜻하지 않습니다. "
+                "출처: U.S. Food and Drug Administration; FDA의 서비스 보증·추천 아님.\n"
+            )
+            parts = (prefix + part for part in chunks(text, size=1600 - len(prefix), overlap=160))
         elif dataset == "mohw-welfare-senior-2026":
             prefix = (
                 f"2026 노령층 복지서비스 · {record.title}\n"
@@ -963,7 +1106,7 @@ def document_records(
             documents.append(
                 SearchDocument(
                     id=identity,
-                    title=redact(record.title),
+                    title=redact(title),
                     content=part,
                     source_url=record.url,
                     dataset_id=dataset,
@@ -1484,10 +1627,53 @@ def collect(
                     "full-summary and page URL indexed. Generation date is a snapshot date, "
                     "not each topic's medical revision date."
                 )
+                missing = sorted(MEDLINE_TOPICS - {record.title for record in records})
+                report.notes.append(
+                    f"Selected {len(records)} exact English topic titles; "
+                    f"unavailable requested titles: {json.dumps(missing)}. "
+                    "A missing title is not evidence that the underlying condition is covered."
+                )
             elif provider == "129-faq":
                 records = collector.faq_129(report)
                 agency = "보건복지부 · 보건복지상담센터 129"
                 license_text = "공공누리 표시 미확인; 무표시 자료 사전협의·공개 RAG 이용허락 필요"
+            elif provider == "fda-older-adult-medicines":
+                policy, _ = collector.fetch(report, FDA_POLICY, "fda-website-policies.html")
+                terms = html_text(policy.decode("utf-8"))
+                if not all(
+                    phrase in terms
+                    for phrase in (
+                        "Linking to or Copying Information on the FDA Website",
+                        "Unless otherwise noted",
+                        "They are in the public domain",
+                        "without the need to obtain permission from FDA",
+                    )
+                ):
+                    raise CollectionError(
+                        "reuse_permission_required",
+                        "FDA public-domain policy could not be verified",
+                    )
+                for identity, title, topic, url in FDA_MEDICINE_PAGES:
+                    data, _ = collector.fetch(report, url, f"fda-{identity}.html")
+                    records.extend(fda_medication_records(data, identity, title, topic, url))
+                agency = "U.S. Food and Drug Administration"
+                license_text = (
+                    "FDA public-domain website text unless otherwise noted; "
+                    f"{FDA_POLICY}#linking; attribution and original source date retained; "
+                    "text only, no FDA endorsement"
+                )
+                report.notes.extend(
+                    [
+                        "Two fixed consumer articles only; policy and raw HTML retained. "
+                        "Article identity, dated time element and narrative scope required. "
+                        "Separate article rights notices fail collection.",
+                        "Article text grouped by original sections. Images, videos, navigation, "
+                        "related links and external linked content excluded. Source dates are "
+                        "FDA's content dates, not a new clinical review. "
+                        "U.S. patient education, not Korean prescribing guidance; "
+                        "independent clinician review remains pending.",
+                    ]
+                )
             elif provider == "mohw-129-guidance":
                 records = collector.mohw_129_guidance(report)
                 agency = "보건복지부 · 보건복지상담센터 129"

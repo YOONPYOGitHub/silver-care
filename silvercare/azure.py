@@ -12,9 +12,26 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from silvercare.config import Settings
 from silvercare.health import HealthService, article_evidence, select_topics
-from silvercare.models import ChatRequest, ChatResponse, Source, SpeechRequest
+from silvercare.models import WHO_REUSE_NOTICE, ChatRequest, ChatResponse, Source, SpeechRequest
 from silvercare.privacy import redact
-from silvercare.safety import MEDICAL_CAUTION, NOTICE, emergency_response, medical_caution
+from silvercare.retrieval import (
+    RetrievalPlan,
+    choose_parents,
+    conversation_only,
+    domain_filter,
+    merge_parent,
+    odata_string,
+    preferred_filter,
+    retrieval_plan,
+    terminology,
+)
+from silvercare.safety import (
+    MEDICAL_CAUTION,
+    NOTICE,
+    answer_display_notice,
+    emergency_response,
+    medical_caution,
+)
 
 logger = logging.getLogger(__name__)
 SEARCH_API = "2024-07-01"
@@ -31,9 +48,20 @@ SYSTEM_PROMPT = """당신은 어르신이 생활·건강·복지를 직접 묻�
 도움이 필요하면 가까운 사람과 함께하는 선택을 제안하되 보호자 개입을 당연한 조건으로 삼지 마세요.
 
 표현과 안내:
-따뜻한 존댓말, 짧은 문장, 쉬운 말을 쓰고 유아화하거나 과장해서 위로하지 마세요.
-핵심을 먼저 설명하고 실행할 일은 1~3가지, 필요한 확인 질문은 한 번에 하나만 제안하세요.
-질문에 필요한 범위만 답하고 어려운 용어는 바로 풀어 설명하세요.
+따뜻한 존댓말과 쉬운 말을 쓰고 유아화하거나 과장해서 위로하지 마세요.
+근거가 영문이어도 이용자가 다른 언어를 요청하지 않았다면 한국어로 설명하세요.
+terminology는 표준 용어 대응표이지 새로운 사실 근거가 아닙니다.
+대응표의 의학 용어와 필요한 원어를 유지하고 임의의 쉬운 말로 적용 범위를 바꾸지 마세요.
+핵심을 먼저 설명하고, 문장을 읽기 쉽게 나누며 어려운 용어는 바로 풀어 설명하세요.
+문장을 짧게 나누더라도 이해와 실행에 필요한 설명을 생략하지 마세요.
+질문의 복잡도, 이용자가 요청한 설명 수준과 대화 맥락에 맞춰 답변의 분량과 구성을 정하세요.
+간단한 사실이나 연락처만 묻는 질문에는 직접 답하고 불필요한 설명을 늘리지 마세요.
+여러 조건·비교·절차·이유를 묻는 질문은 요청한 항목을 빠짐없이 다루고 서로의 관계를 설명하세요.
+자세한 설명을 요청하면 단계·적용 조건·이유·구체적인 예시를 포함하세요.
+제공된 근거가 없는 수치·조건·사실을 덧붙여 분량을 늘리지 마세요.
+설명이 길어지면 소제목·목록·번호를 활용하고 같은 내용이나 주의 문구를 불필요하게 반복하지 마세요.
+간단히 또는 요약해 달라는 요청에는 그 수준을 따르되 중요한 조건·예외·안전 안내는 누락하지 마세요.
+확인이 필요한 정보가 있으면 알 수 있는 내용을 먼저 안내하고 확인 질문은 한 번에 하나만 제안하세요.
 사용자 안내에는 내부 공급자·모델·기술 서비스명 대신 AI 응답·자료 검색·음성 같은 기능명을 쓰세요.
 자료의 실제 출처 기관과 출처 링크는 숨기거나 바꾸지 마세요.
 
@@ -41,11 +69,25 @@ SYSTEM_PROMPT = """당신은 어르신이 생활·건강·복지를 직접 묻�
 법률·의료·복지의 구체적 사실은 제공된 reference 자료 범위에서만 설명하고 [1]처럼 인용하세요.
 official_api는 질병관리청 승인 API에서 조회한 건강정보입니다.
 API 조회 시각은 원문의 개정일이나 임상 검증일이 아닙니다.
-질문에 관련된 official_api 본문이 있으면 그 내용을 기존 지식과 함께 근거로 활용하고 인용하세요.
+질문에 관련된 official_api 본문이 있으면 그 내용으로 확인한 설명을 답변에 포함하세요.
+그 설명에는 반드시 해당 official_api 자료의 인용 번호를 표시하세요.
 같은 내용의 근거가 겹치면 직접 확인한 공식 자료를 우선하고, 자료가 충돌하면 차이를 명시하세요.
+source_type은 자료의 용도, jurisdiction은 적용 국가·범위입니다.
+patient_education은 일반 환자교육, clinical_guideline은 전문가용 지침입니다.
+drug_mechanism은 기전의 예시이지 모든 약물 조합의 금기·위험도를 판정하는 표가 아닙니다.
+drug_label은 해당 미국 제품의 제출 라벨입니다.
+승인 문구·국내 허가사항과 동일하다고 인증된 것은 아닙니다.
+미국·국제 자료를 한국의 허가·보험·제도 기준으로 바꾸어 설명하지 마세요.
+의약품의 성분·제품·제형·투여 경로·적응증 사이에서 조건을 옮겨 적용하지 마세요.
+수치·비교 기호·단위·조건의 AND/OR·예외·근거 강도를 보존하고 빠진 조건은 추정하지 마세요.
+근거 불충분을 효과 없음이나 사용 금지로, 표의 빈칸을 안전함으로 바꾸지 마세요.
+약의 성분·제품이 확인되지 않은 병용 질문에는 안전을 단정하거나 임의의 약으로 대신 판단하지 마세요.
+welfare_guidance·institution_directory·contact_reference는
+해당 제도·기관·공식 문의 범위에서 사용하세요.
 질문과 관련 없는 자료를 억지로 인용하거나 출처 없이 개인별 의학적 판단으로 바꾸지 마세요.
-자료의 audience는 독자 구분이며 provider는 기관 담당자용입니다.
+자료의 audience는 독자 구분이며 provider는 의료인·기관 담당자용입니다.
 직원의 업무를 이용자의 할 일로 바꾸지 마세요.
+전문가용 평가·처치·약물 조절 지침을 이용자의 자가 진단·자가 처치 지시로 바꾸지 마세요.
 독자·연령 태그는 보조 정보이며 이용자의 나이·가족관계·질병을 추론하는 근거가 아닙니다.
 dataset_knowledge는 공개 데이터 수록 자료의 자동 정리본이며 전문가 검토 전입니다.
 약물·검사 등 일반 정보는 설명할 수 있습니다.
@@ -73,10 +115,18 @@ def case_question(content: str) -> str:
 
 
 class UpstreamError(Exception):
-    def __init__(self, service: str, status: int = 503, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        service: str,
+        status: int = 503,
+        retry_after: float | None = None,
+        *,
+        code: str = "",
+    ) -> None:
         self.service = service
         self.status = status
         self.retry_after = retry_after
+        self.code = code
         super().__init__(f"{service} unavailable ({status})")
 
 
@@ -141,7 +191,18 @@ class AzureServices:
                         retry_after = seconds
                 except ValueError:
                     logger.warning("Non-numeric upstream retry-after header")
-            raise UpstreamError(service, response.status_code, retry_after)
+            code = ""
+            if service == "model" and response.status_code == 400:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    logger.warning("Model error response is not JSON")
+                else:
+                    if isinstance(payload, dict):
+                        error = payload.get("error")
+                        if isinstance(error, dict) and error.get("code") == "content_filter":
+                            code = "content_filter"
+            raise UpstreamError(service, response.status_code, retry_after, code=code)
         return response
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -236,6 +297,8 @@ class AzureServices:
         kind: str,
         query_vector: list[float] | None = None,
         mode: str | None = None,
+        *,
+        plan: RetrievalPlan | None = None,
     ) -> list[dict[str, Any]]:
         if not self.settings.azure_search_endpoint:
             logger.warning("Search not configured; development conversation-only mode")
@@ -268,7 +331,7 @@ class AzureServices:
                 "id,title,content,dataset_id,source_url,updated_at,evidence_kind,"
                 "source_record_id,source_display,source_year,review_status,"
                 "risk_level,answer_interpretation"
-                ",audience,age_code,age_group"
+                ",audience,age_code,age_group,license"
             ),
             "top": 6 if kind == "reference" else 2,
         }
@@ -293,6 +356,19 @@ class AzureServices:
                         "semanticConfiguration": "care-semantic",
                     }
                 )
+        if self.settings.contextual_retrieval:
+            payload["select"] += (
+                ",domain,source_type,source_language,jurisdiction,parent_id,chunk_index,drug_entities,topic"
+            )
+            if kind == "reference":
+                result = await self.contextual_references(
+                    endpoint,
+                    index,
+                    payload,
+                    plan or retrieval_plan(query, query.split("\n", 1)[0]),
+                )
+                self.check_reference_license(result)
+                return result
         response = await self.request(
             "search",
             "POST",
@@ -300,34 +376,146 @@ class AzureServices:
             headers={"Authorization": f"Bearer {await self.token(search=True)}"},
             json=payload,
         )
-        result: list[dict[str, Any]] = response.json()["value"]
+        result = response.json()["value"]
+        if (
+            self.settings.prefer_official_references
+            and kind == "reference"
+            and any(row.get("evidence_kind") == "dataset_knowledge" for row in result)
+        ):
+            official_response = await self.request(
+                "search",
+                "POST",
+                f"{endpoint}/indexes/{index}/docs/search?api-version={SEARCH_API}",
+                headers={"Authorization": f"Bearer {await self.token(search=True)}"},
+                json={**payload, "filter": "evidence_kind eq 'reference'", "top": 2},
+            )
+            official: list[dict[str, Any]] = official_response.json()["value"]
+            official_ids = {row["id"] for row in official}
+            result = [*official, *(row for row in result if row["id"] not in official_ids)][:6]
+        self.check_reference_license(result)
         return result
+
+    def check_reference_license(self, rows: list[dict[str, Any]]) -> None:
+        if not self.settings.noncommercial_data_use and any(
+            row.get("dataset_id") == "who-icope-2025" for row in rows
+        ):
+            logger.error("WHO reference retrieval requires confirmed noncommercial data use")
+            raise UpstreamError("search")
+
+    async def contextual_references(
+        self, endpoint: str, index: str, payload: dict[str, Any], plan: RetrievalPlan
+    ) -> list[dict[str, Any]]:
+        if not plan.search_references:
+            return []
+        scope = domain_filter(plan)
+        evidence_filter = payload["filter"]
+        filters = evidence_filter + (f" and ({scope})" if scope else "")
+        headers = {"Authorization": f"Bearer {await self.token(search=True)}"}
+        url = f"{endpoint}/indexes/{index}/docs/search?api-version={SEARCH_API}"
+        broad_request = self.request(
+            "search",
+            "POST",
+            url,
+            headers=headers,
+            json={**payload, "filter": filters, "top": 12},
+        )
+        preferred: list[dict[str, Any]] = []
+        if self.settings.prefer_official_references:
+            broad_response, preferred_response = await asyncio.gather(
+                broad_request,
+                self.request(
+                    "search",
+                    "POST",
+                    url,
+                    headers=headers,
+                    json={**payload, "filter": f"{filters} and {preferred_filter(plan)}", "top": 6},
+                ),
+            )
+            preferred = preferred_response.json()["value"]
+        else:
+            broad_response = await broad_request
+        broad: list[dict[str, Any]] = broad_response.json()["value"]
+        try:
+            anchors = choose_parents(broad, preferred, domains=plan.domains)
+        except ValueError as exc:
+            logger.error("Invalid contextual retrieval metadata")
+            raise UpstreamError("search", 502) from exc
+        if not anchors:
+            return []
+        groups = [
+            f"(parent_id eq {odata_string(row['parent_id'])} "
+            f"and chunk_index ge {max(0, row['chunk_index'] - 1)} "
+            f"and chunk_index le {row['chunk_index'] + 1})"
+            for row in anchors
+        ]
+        response = await self.request(
+            "search",
+            "POST",
+            url,
+            headers=headers,
+            json={
+                "search": "*",
+                "filter": f"{evidence_filter} and ({' or '.join(groups)})",
+                "select": payload["select"],
+                "top": 18,
+                "orderby": "chunk_index asc",
+            },
+        )
+        siblings: list[dict[str, Any]] = response.json()["value"]
+        try:
+            return [
+                merge_parent(
+                    anchor,
+                    [row for row in siblings if row.get("parent_id") == anchor["parent_id"]],
+                )
+                for anchor in anchors
+            ]
+        except (ValueError, KeyError) as exc:
+            logger.error("Invalid adjacent source context; refusing incomplete parent lookup")
+            raise UpstreamError("search", 502) from exc
 
     async def chat(self, payload: ChatRequest) -> ChatResponse:
         emergency = emergency_response(payload.message)
         if emergency:
             return emergency
         query = redact(payload.message)
-        health_topics = (
-            select_topics(query, payload.history)
-            if self.settings.kdca_health_api_key.get_secret_value()
-            else []
-        )
+        contextual = self.settings.contextual_retrieval
+        chat_only = contextual and conversation_only(query)
         # A follow-up such as "어디에 신청해요?" needs the preceding user topic.
         prior = [redact(m.content) for m in payload.history if m.role == "user"]
         search_query = " ".join([*prior[-2:], query])[-2400:]
-        if self.settings.retrieval_mode == "hybrid" and self.settings.rewrite_queries:
+        if (
+            not chat_only
+            and self.settings.retrieval_mode == "hybrid"
+            and self.settings.rewrite_queries
+        ):
             search_query = await self.expand_query(query, prior)
+        plan = retrieval_plan(search_query, query) if contextual else None
+        health_topics = (
+            select_topics(query, payload.history)
+            if not chat_only and self.settings.kdca_health_api_key.get_secret_value()
+            else []
+        )
         vector = (
             (await self.embed([search_query]))[0]
-            if self.settings.retrieval_mode == "hybrid"
+            if not chat_only and self.settings.retrieval_mode == "hybrid"
             else None
         )
-        references = await self.search(search_query, "reference", vector)
-        dialogues = await self.search(query, "dialogue", vector)
+        if chat_only:
+            references = []
+        elif contextual:
+            references = await self.search(search_query, "reference", vector, plan=plan)
+        else:
+            references = await self.search(search_query, "reference", vector)
+        dialogues = [] if chat_only else await self.search(query, "dialogue", vector)
+        use_qa = (
+            plan.qa_examples and "medical" in plan.domains
+            if contextual and plan is not None
+            else bool(medical_caution(query, ""))
+        )
         qa_cases = (
             await self.search(query, "qa_case", vector)
-            if self.settings.azure_search_case_index and medical_caution(query, "")
+            if not chat_only and self.settings.azure_search_case_index and use_qa
             else []
         )
         for topic in health_topics:
@@ -344,15 +532,24 @@ class AzureServices:
                     "source_year": "",
                     "risk_level": "clinical",
                     "audience": "caregiver" if article.topic.id == "6858" else "self",
+                    "source_type": "official_api",
+                    "source_language": "ko",
+                    "jurisdiction": "KR",
                 }
             )
-        context = {
+        if self.settings.prefer_official_references:
+            references.sort(key=lambda row: row.get("evidence_kind") != "official_api")
+        context: dict[str, Any] = {
             "reference": [
                 {
                     "citation": i,
                     "title": row["title"],
                     "text": row["content"][
-                        : 4800 if row.get("evidence_kind") == "official_api" else 2200
+                        : 4800
+                        if row.get("evidence_kind") == "official_api"
+                        else 3600
+                        if contextual
+                        else 2200
                     ],
                     "evidence_kind": row.get("evidence_kind", "reference"),
                     "source_display": row.get("source_display", ""),
@@ -360,6 +557,18 @@ class AzureServices:
                     "source_year": row.get("source_year", ""),
                     "risk_level": row.get("risk_level", "general"),
                     "audience": row.get("audience") or "general",
+                    **(
+                        {
+                            "source_type": row.get("source_type", "reference"),
+                            "source_language": row.get("source_language", "unknown"),
+                            "jurisdiction": row.get("jurisdiction", "unspecified"),
+                            "topic": row.get("topic", ""),
+                            "drug_entities": row.get("drug_entities", []),
+                            "context_record_ids": row.get("context_record_ids", []),
+                        }
+                        if contextual
+                        else {}
+                    ),
                 }
                 for i, row in enumerate(references, 1)
             ],
@@ -379,6 +588,14 @@ class AzureServices:
                 for row in qa_cases
             ],
         }
+        if contextual and plan is not None:
+            context["retrieval_scope"] = {
+                "domains": list(plan.domains),
+                "recognized_drugs": list(plan.drugs),
+                "drug_identity_needs_confirmation": plan.needs_drug_identity,
+                "conversation_only": chat_only,
+            }
+            context["terminology"] = terminology(references)
         inputs = [{"role": item.role, "content": redact(item.content)} for item in payload.history]
         inputs.append({"role": "user", "content": query})
         response = await self.request(
@@ -422,6 +639,19 @@ class AzureServices:
                 record_id=row.get("source_record_id") or "",
                 source_display=row.get("source_display") or "",
                 source_year=row.get("source_year") or "",
+                license=row.get("license") or "",
+                license_url=(
+                    "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+                    if row.get("dataset_id") == "who-icope-2025"
+                    else ""
+                ),
+                reuse_notice=(
+                    WHO_REUSE_NOTICE if row.get("dataset_id") == "who-icope-2025" else ""
+                ),
+                source_type=row.get("source_type", ""),
+                source_language=row.get("source_language", ""),
+                jurisdiction=row.get("jurisdiction", ""),
+                context_record_ids=row.get("context_record_ids", []),
             )
             for i, row in enumerate(references, 1)
             if i in cited
@@ -437,13 +667,22 @@ class AzureServices:
             if dataset_cited
             else NOTICE
         )
+        response_notice = notice if sources else f"이 답변에는 인용된 참고자료가 없습니다. {NOTICE}"
+        caution = medical_caution(payload.message, answer) or (
+            MEDICAL_CAUTION if health_topics else None
+        )
         return ChatResponse(
             answer=redact(answer),
             sources=sources,
             mode="grounded" if sources else "conversation",
-            notice=notice if sources else f"이 답변에는 인용된 참고자료가 없습니다. {NOTICE}",
-            medical_caution=medical_caution(payload.message, answer)
-            or (MEDICAL_CAUTION if health_topics else None),
+            notice=response_notice,
+            medical_caution=caution,
+            display_notice=answer_display_notice(
+                response_notice,
+                caution,
+                dataset_cited=dataset_cited,
+                has_sources=bool(sources),
+            ),
             health_topics=health_topics,
         )
 

@@ -14,11 +14,15 @@ from silvercare.external_sources import (
     API_DOCS,
     DEFAULT_PROVIDERS,
     FAQ_129_PAGE,
+    FDA_MEDICINE_PAGES,
+    FDA_POLICY,
     KDCA_OLDER_ARTICLES,
     KDCA_VIEW,
     MAX_DOWNLOAD,
     MAX_FAQ_RECORDS,
     MAX_KDCA_SECTIONS,
+    MEDLINE_KOREAN_TITLES,
+    MEDLINE_TOPICS,
     MOHW_129_GUIDE,
     PUBLIC_REUSE_NOTICES,
     CollectionError,
@@ -29,6 +33,7 @@ from silvercare.external_sources import (
     collect,
     document_records,
     faq_129_records,
+    fda_medication_records,
     hwpx_records,
     kdca_records,
     main,
@@ -37,6 +42,141 @@ from silvercare.external_sources import (
     parse_xml,
     zip_members,
 )
+
+
+def test_medline_selection_uses_actual_titles_and_excludes_pediatric_topics() -> None:
+    assert {
+        "Pressure Sores",
+        "Coping with Chronic Illness",
+        "Atrial Fibrillation",
+        "Mild Cognitive Impairment",
+        "Enlarged Prostate (BPH)",
+        "Drug Safety",
+    } <= MEDLINE_TOPICS
+    assert (
+        not {
+            "Bedsores",
+            "Frailty",
+            "Living with Chronic Illness",
+            "Cancer in Children",
+            "Reflux in Infants",
+        }
+        & MEDLINE_TOPICS
+    )
+
+
+def test_medline_can_prepare_the_complete_explicit_specialty_allowlist() -> None:
+    topics = "".join(
+        f'<health-topic title="{escape(title)}" language="English" id="{index}" '
+        f'url="https://medlineplus.gov/topic{index}.html">'
+        "<full-summary>Synthetic official topic summary for parser validation.</full-summary>"
+        "</health-topic>"
+        for index, title in enumerate(sorted(MEDLINE_TOPICS))
+    )
+    xml = f'<health-topics date-generated="11/07/2026">{topics}</health-topics>'
+    records = medline_records(archive({"mplus_topics_2026-11-07.xml": xml}))
+    assert len(records) == len(MEDLINE_TOPICS)
+
+
+def test_medline_korean_titles_are_metadata_not_replacement_source_text() -> None:
+    assert MEDLINE_KOREAN_TITLES.keys() <= MEDLINE_TOPICS
+    record = Record(
+        "302",
+        "Kidney Failure",
+        "Synthetic English source text. " * 120,
+        "https://medlineplus.gov/kidneyfailure.html",
+        "2026",
+        "2026-11-13",
+    )
+    documents, _ = document_records([record], "medlineplus", "NLM", "public domain")
+    assert len(documents) > 1
+    assert all(document.title == "신부전 · Kidney Failure" for document in documents)
+    assert all(document.source_record_id == "302" for document in documents)
+    assert all("Synthetic English" in document.content for document in documents)
+
+
+def fda_html(title: str) -> bytes:
+    return (
+        "<nav>NAVIGATION</nav><article id='main-content'>"
+        f"<h1>{title}</h1><div role='main'>"
+        "<figure><p>EXCLUDED IMAGE CAPTION</p></figure><p>Español</p>"
+        "<p>" + "Synthetic introductory paragraph for parser validation. " * 20 + "</p>"
+        "<h2>Keep a medication list</h2><p>"
+        + "Synthetic paragraph about a list of medicines. "
+        * 20
+        + "</p><ul><li>Name</li><li>When taken</li></ul>"
+        "<div><p>EXCLUDED RELATED CONTENT</p></div></div>"
+        "<time datetime='2025-01-08T09:00:00Z'>01/08/2025</time>"
+        "</article><footer>EXCLUDED FOOTER</footer>"
+    ).encode()
+
+
+def test_fda_preserves_sections_dates_and_only_scoped_text() -> None:
+    identity, title, topic, url = FDA_MEDICINE_PAGES[1]
+    records = fda_medication_records(fda_html(title), identity, title, topic, url)
+    assert len(records) == 2
+    assert all(record.updated == "2025-01-08" and record.audience == "self" for record in records)
+    assert records[1].record_id == "medication-list:1"
+    assert "Name" in records[1].text and "When taken" in records[1].text
+    assert not any(
+        word in record.text for record in records for word in ("EXCLUDED", "NAVIGATION", "Español")
+    )
+    documents, _ = document_records(records, "fda-older-adult-medicines", "FDA", "public domain")
+    assert all(len(document.content) <= 1600 for document in documents)
+    assert all("한국의 의약품 허가" in document.content for document in documents)
+    assert all(document.source_year == "2025" for document in documents)
+
+
+@pytest.mark.parametrize(
+    "old,new,code",
+    [
+        (b"2025-01-08", b"2025-02-31", "article_identity"),
+        (b"main-content", b"unrelated", "article_identity"),
+        (b"role='main'", b"role='navigation'", "article_identity"),
+        (b"<p>Espa", b"<p>Copyright third-party content</p><p>Espa", "reuse_permission_required"),
+        (b"Synthetic", b"", "empty_article"),
+    ],
+)
+def test_fda_rejects_changed_identity_dates_and_rights(old, new, code) -> None:
+    identity, title, topic, url = FDA_MEDICINE_PAGES[1]
+    data = fda_html(title).replace(old, new)
+    if code == "empty_article":
+        data = data.replace(b"paragraph", b"").replace(b"introductory", b"")
+    with pytest.raises(CollectionError) as error:
+        fda_medication_records(data, identity, title, topic, url)
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize("permitted", [True, False])
+def test_fda_collection_requires_verified_policy_before_articles(tmp_path, permitted) -> None:
+    calls = []
+
+    def handler(request):
+        calls.append(str(request.url))
+        if str(request.url) == FDA_POLICY:
+            terms = (
+                "Linking to or Copying Information on the FDA Website. Unless otherwise noted. "
+                "They are in the public domain without the need to obtain permission from FDA."
+                if permitted
+                else "All rights reserved."
+            )
+            return httpx.Response(200, text=terms)
+        for _, title, _, url in FDA_MEDICINE_PAGES:
+            if str(request.url) == url:
+                return httpx.Response(200, content=fda_html(title))
+        pytest.fail("Unexpected FDA request")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = collect(
+            tmp_path,
+            settings=DataSourceSettings(_env_file=None),
+            client=client,
+            raw_dir=tmp_path / "raw",
+            providers=["fda-older-adult-medicines"],
+        )
+    assert report["status"] == ("success" if permitted else "failed")
+    assert len(calls) == (3 if permitted else 1)
+
 
 # Reduced public HTML observed on 2026-11-09; text excerpts are not fabricated advice.
 FAQ_HTML = """

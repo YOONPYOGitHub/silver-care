@@ -41,6 +41,10 @@ def test_scroll_and_dock_are_separate_balanced_regions_with_unique_controls():
     for control in ("mode-text", "mode-voice", "chat-form", "voice-panel", "new-answer"):
         assert "conversation-dock" in parser.paths[control]
         assert "conversation-scroll" not in parser.paths[control]
+    for control in ("chat-form", "voice-panel", "new-answer"):
+        assert "dock-content" in parser.paths[control]
+    for control in ("mode-text", "mode-voice", "open-info"):
+        assert "dock-content" not in parser.paths[control]
     for control in ("welcome", "topics", "messages"):
         assert "conversation-scroll" in parser.paths[control]
         assert "conversation-dock" not in parser.paths[control]

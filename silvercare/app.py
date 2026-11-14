@@ -151,6 +151,17 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
 
     @app.exception_handler(UpstreamError)
     async def upstream_error(request: Request, exc: UpstreamError) -> JSONResponse:
+        if exc.service == "model" and exc.code == "content_filter":
+            return JSONResponse(
+                {
+                    "code": "safety_refusal",
+                    "detail": (
+                        "안전 정책에 따라 이 질문에는 답변을 제공할 수 없어요. "
+                        "건강이나 약 복용에 관한 판단은 의료진에게 확인해 주세요."
+                    ),
+                },
+                422,
+            )
         names = {
             "search": "자료 검색",
             "model": "AI 답변",

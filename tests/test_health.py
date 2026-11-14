@@ -109,6 +109,26 @@ def test_topic_matching_does_not_diagnose_or_carry_over_unrelated_family_history
     assert [t.id for t in select_topics("좀 더 자세히 알려주세요", prior)] == ["6698"]
 
 
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        ("물만 마시면 사레가 잘 들어요", "5314"),
+        ("음식이 목에 걸리는 느낌이 자주 있어요", "5314"),
+        ("연하곤란이 무엇인가요?", "5314"),
+        ("혈압약이랑 감기약을 같이 먹어도 괜찮아요?", "5428"),
+        ("다른 약과 함께 쓸 때 무엇을 확인하나요?", "5428"),
+    ],
+)
+def test_verified_colloquial_aliases_reach_the_existing_approved_topics(question, expected):
+    assert expected in [topic.id for topic in select_topics(question, [])]
+
+
+def test_low_blood_pressure_is_not_routed_as_high_blood_pressure():
+    assert "6698" not in [topic.id for topic in select_topics("저혈압으로 혈압이 낮아요", [])]
+    assert "6698" in [topic.id for topic in select_topics("고혈압인데 혈압이 낮아졌어요", [])]
+    assert select_topics("내일 약속과 예약이 있어요. 약관을 확인해요.", []) == []
+
+
 def test_generation_evidence_selects_relevant_bounded_paragraphs_not_just_article_start():
     article = HealthArticle(
         topic=BY_ID["1743"].public(),
@@ -126,7 +146,10 @@ def test_generation_evidence_selects_relevant_bounded_paragraphs_not_just_articl
     assert 0 < len(evidence) <= 4800
 
 
-async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_citations():
+@pytest.mark.parametrize("prefer_official", [False, True])
+async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_citations(
+    prefer_official,
+):
     captured = []
     provider_calls = []
 
@@ -139,6 +162,8 @@ async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_ci
     def handler(request):
         body = json.loads(request.content)
         if "/docs/search" in str(request.url):
+            if body["filter"] == "evidence_kind eq 'reference'":
+                return httpx.Response(200, json={"value": []})
             if "dialogue" in body["filter"]:
                 return httpx.Response(200, json={"value": [{"content": "합성 AI Hub 대화 예시"}]})
             if "qa_case" in body["filter"]:
@@ -159,6 +184,7 @@ async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_ci
                 json={
                     "value": [
                         {
+                            "id": "synthetic-knowledge",
                             "title": "AI Hub 의학 원천",
                             "content": "합성 AI Hub 지식 근거",
                             "source_url": "https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=71874",
@@ -171,8 +197,8 @@ async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_ci
         captured.append(body)
         context = json.loads(body["instructions"].split("\n검색 데이터(JSON):\n")[1])
         assert len(context["reference"]) == 2
-        assert context["reference"][0]["text"] == "합성 AI Hub 지식 근거"
-        official = context["reference"][1]
+        assert context["reference"][int(prefer_official)]["text"] == "합성 AI Hub 지식 근거"
+        official = context["reference"][int(not prefer_official)]
         assert official["evidence_kind"] == "official_api"
         assert official["source_record_id"] == "1743"
         assert "둘째 문단: 약물·검사도 원문 그대로예요." in official["text"]
@@ -201,6 +227,7 @@ async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_ci
         _env_file=None,
         azure_search_endpoint="https://search.example",
         azure_search_case_index="cases",
+        prefer_official_references=prefer_official,
         kdca_health_api_key=SecretStr("synthetic-kdca-key"),
     )
     health = HealthService(
@@ -215,10 +242,11 @@ async def test_generator_combines_aihub_knowledge_and_kdca_body_with_distinct_ci
         result = await service.chat(ChatRequest(message="낙상 검사에 대한 질문이에요."))
         assert result.mode == "grounded"
         assert [source.id for source in result.sources] == [1, 2]
-        assert result.sources[0].evidence_kind == "dataset_knowledge"
-        assert result.sources[1].evidence_kind == "official_api"
-        assert result.sources[1].url == BY_ID["1743"].public().url
-        assert result.sources[1].record_id == "1743"
+        assert result.sources[int(prefer_official)].evidence_kind == "dataset_knowledge"
+        official_source = result.sources[int(not prefer_official)]
+        assert official_source.evidence_kind == "official_api"
+        assert official_source.url == BY_ID["1743"].public().url
+        assert official_source.record_id == "1743"
         assert result.health_topics[0].id == "1743"
         assert "AI Hub 수록자료의 출처 링크" in result.notice
         assert len(captured) == len(provider_calls) == 1

@@ -9,11 +9,11 @@ import unicodedata
 import wave
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from silvercare.azure import SYSTEM_PROMPT, AzureServices, UpstreamError
 from silvercare.config import get_settings
@@ -174,8 +174,34 @@ class AudienceCase(BaseModel):
     request: ChatRequest
     forbidden: list[str] = Field(default_factory=list)
     required_any: list[str] = Field(default_factory=list)
+    required_concepts: list[list[str]] = Field(default_factory=list)
+    accept_provider_safety_refusal: bool = False
     required_source_url: str = ""
-    max_characters: int = Field(default=750, ge=1)
+    required_source_any: list[str] = Field(default_factory=list)
+    required_source_type_groups: list[list[str]] = Field(default_factory=list)
+    expected_mode: Literal["grounded", "conversation", "emergency"] | None = None
+    required_patterns: list[str] = Field(default_factory=list)
+    require_medical_caution: bool = False
+    max_characters: int | None = Field(default=None, ge=1)
+
+    @field_validator("required_concepts", "required_source_type_groups")
+    @classmethod
+    def meaningful_concepts(cls, groups: list[list[str]]) -> list[list[str]]:
+        if any(not group or any(not term.strip() for term in group) for group in groups):
+            raise ValueError("Required concept groups must contain nonempty alternatives")
+        return groups
+
+    @field_validator("required_patterns")
+    @classmethod
+    def valid_patterns(cls, patterns: list[str]) -> list[str]:
+        for pattern in patterns:
+            if not pattern.strip():
+                raise ValueError("Required patterns must not be empty")
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError("Required pattern is not a valid regular expression") from exc
+        return patterns
 
 
 async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
@@ -193,38 +219,103 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
         "index": services.settings.azure_search_index,
         "case_index": services.settings.azure_search_case_index,
         "official_health_enabled": bool(services.settings.kdca_health_api_key.get_secret_value()),
+        "prefer_official_references": services.settings.prefer_official_references,
+        "noncommercial_data_use": services.settings.noncommercial_data_use,
+        "contextual_retrieval": services.settings.contextual_retrieval,
         "knowledge_sha256": hashlib.sha256(knowledge).hexdigest(),
         "cases_sha256": hashlib.sha256(case_data).hexdigest(),
         "cases": [],
         "limitations": (
-            "Synthetic phrase/length regression checks, not clinical or human usability validation."
+            "Synthetic concept/citation regression checks, not clinical or human usability "
+            "validation. Explicitly permitted provider safety refusals are not medical answers."
         ),
+        "clinical_review_status": "not_performed",
     }
     try:
         for case in cases:
-            result = await services.chat(case.request)
+            try:
+                result = await services.chat(case.request)
+            except (UpstreamError, HealthUnavailable) as exc:
+                violation = (
+                    f"upstream:{exc.service}:{exc.status}"
+                    if isinstance(exc, UpstreamError)
+                    else f"health:{exc.reason}"
+                )
+                accepted = (
+                    case.accept_provider_safety_refusal
+                    and isinstance(exc, UpstreamError)
+                    and exc.service == "model"
+                    and exc.status == 400
+                    and exc.code == "content_filter"
+                )
+                report["cases"].append(
+                    {
+                        "id": case.id,
+                        "violations": [] if accepted else [violation],
+                        "passed": accepted,
+                        "answer_generated": False,
+                        "outcome": "provider_safety_refusal" if accepted else "upstream_error",
+                        "provider_error": violation,
+                    }
+                )
+                print(
+                    json.dumps(
+                        {"id": case.id, "passed": accepted, "error": violation, "answered": False}
+                    ),
+                    flush=True,
+                )
+                continue
             violations = [f"forbidden:{text}" for text in case.forbidden if text in result.answer]
             if case.required_any and not any(text in result.answer for text in case.required_any):
                 violations.append("missing_target")
-            if len(result.answer) > case.max_characters:
+            for index, alternatives in enumerate(case.required_concepts):
+                if not any(text.casefold() in result.answer.casefold() for text in alternatives):
+                    violations.append(f"missing_concept:{index}")
+            if case.max_characters is not None and len(result.answer) > case.max_characters:
                 violations.append("answer_too_long")
+            for index, pattern in enumerate(case.required_patterns):
+                if not re.search(pattern, result.answer, re.MULTILINE):
+                    violations.append(f"missing_pattern:{index}")
+            if case.require_medical_caution and not result.medical_caution:
+                violations.append("missing_medical_caution")
             source_urls = [source.url for source in result.sources]
+            source_types = {source.source_type for source in result.sources}
+            if case.expected_mode is not None and result.mode != case.expected_mode:
+                violations.append("unexpected_response_mode")
+            for index, alternatives in enumerate(case.required_source_type_groups):
+                if not source_types.intersection(alternatives):
+                    violations.append(f"missing_source_type_group:{index}")
             if case.required_source_url and case.required_source_url not in source_urls:
                 violations.append("missing_required_citation")
+            if case.required_source_any and not set(case.required_source_any).intersection(
+                source_urls
+            ):
+                violations.append("missing_required_source")
             row = {
                 "id": case.id,
                 "answer": result.answer,
                 "violations": violations,
                 "passed": not violations,
+                "answer_generated": True,
+                "outcome": "answer",
                 "source_urls": source_urls,
                 "source_kinds": [source.evidence_kind for source in result.sources],
                 "health_topic_ids": [topic.id for topic in result.health_topics],
+                "mode": result.mode,
+                "source_types": [source.source_type for source in result.sources],
+                "source_jurisdictions": [source.jurisdiction for source in result.sources],
+                "context_record_ids": [source.context_record_ids for source in result.sources],
+                "medical_caution": result.medical_caution,
             }
             report["cases"].append(row)
             print(json.dumps({"id": case.id, "passed": row["passed"]}), flush=True)
     finally:
         await services.close()
     report["passed"] = all(row["passed"] for row in report["cases"])
+    report["answers_generated"] = sum(row["answer_generated"] for row in report["cases"])
+    report["provider_safety_refusals"] = sum(
+        row["outcome"] == "provider_safety_refusal" for row in report["cases"]
+    )
     output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     await asyncio.to_thread(output.write_text, json.dumps(report, ensure_ascii=False, indent=2))
     await asyncio.to_thread(output.chmod, 0o600)
@@ -233,7 +324,8 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
 
 def relevant(row: dict[str, Any], target: dict[str, Any]) -> bool:
     return (
-        row.get("source_record_id") in target.get("record_ids", [])
+        row.get("source_url") in target.get("source_urls", [])
+        or row.get("source_record_id") in target.get("record_ids", [])
         or row.get("dataset_id") in target.get("datasets", [])
         or any(text in row.get("title", "") for text in target.get("title_contains", []))
     )
@@ -252,6 +344,9 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
         "hybrid_pipeline": {
             "rewrite_queries": services.settings.rewrite_queries,
             "semantic_ranking": services.settings.semantic_ranking,
+            "prefer_official_references": services.settings.prefer_official_references,
+            "noncommercial_data_use": services.settings.noncommercial_data_use,
+            "contextual_retrieval": services.settings.contextual_retrieval,
         },
         "index": services.settings.azure_search_index,
         "endpoint": services.settings.azure_search_endpoint,
@@ -263,7 +358,10 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
         report["knowledge_sha256"] = hashlib.sha256(content).hexdigest()
     try:
         for target in queries:
-            results: dict[str, Any] = {"query": target["query"]}
+            results: dict[str, Any] = {
+                "query": target["query"],
+                "required": target.get("required", False),
+            }
             for mode in ("keyword", "hybrid"):
                 started = time.perf_counter()
                 query = (
@@ -282,6 +380,7 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
                         {
                             "title": row["title"],
                             "record_id": row.get("source_record_id"),
+                            "source_url": row.get("source_url"),
                             "excerpt": row["content"][:180],
                         }
                         for row in rows
@@ -308,9 +407,13 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
             "mrr_at_6": sum(1 / row["rank"] if row["rank"] else 0 for row in rows) / len(rows),
             "mean_seconds": sum(row["seconds"] for row in rows) / len(rows),
         }
+    report["required_targets_passed"] = all(
+        row["hybrid"]["hit"] for row in report["queries"] if row["required"]
+    )
     report["nonregression_passed"] = (
         report["metrics"]["hybrid"]["hit_at_6"] >= report["metrics"]["keyword"]["hit_at_6"]
         and report["metrics"]["hybrid"]["mrr_at_6"] >= report["metrics"]["keyword"]["mrr_at_6"]
+        and report["required_targets_passed"]
     )
     report["limitations"] = (
         "Small fixed, non-exhaustive target set. Retrieval targets are not medical-answer accuracy."

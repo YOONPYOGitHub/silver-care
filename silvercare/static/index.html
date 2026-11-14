@@ -104,14 +104,8 @@
           </section>
           </div>
           <section id="conversation-dock" class="composer-wrap conversation-dock" tabindex="-1" aria-label="대화 조작부">
+            <div class="dock-content">
             <button type="button" id="new-answer" class="new-answer" hidden>새 답변 보기 ↓</button>
-            <div class="conversation-mode">
-              <div class="mode-buttons" role="group" aria-label="대화 방식 선택">
-                <button type="button" id="mode-text" aria-pressed="true"><svg aria-hidden="true"><use href="#i-chat"/></svg>글로 대화</button>
-                <button type="button" id="mode-voice" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#i-mic"/></svg>말로 대화</button>
-              </div>
-              <p id="mode-description">글을 입력하고 보내기를 눌러 주세요. 대화 중에도 방식을 바꿀 수 있어요.</p>
-            </div>
             <div id="error" class="error-banner" role="alert" hidden></div>
             <div id="audio-panel" class="audio-panel" hidden><span>온담의 답변 듣기</span><audio id="audio" controls preload="none"></audio><button id="close-audio" class="text-button" aria-label="음성 재생 닫기">닫기</button></div>
             <div class="composer-hint" id="composer-hint"><svg><use href="#i-shield"/></svg>이름, 연락처, 주민등록번호는 적지 말아 주세요.</div>
@@ -138,8 +132,16 @@
               <textarea id="message" rows="1" maxlength="2000" placeholder="지금 어떤 도움이 필요하신가요?" aria-describedby="composer-help"></textarea>
               <div class="composer-actions"><button type="submit" class="send-button" id="send" aria-label="메시지 보내기"><svg><use href="#i-arrow"/></svg></button></div>
             </form>
+            </div>
+            <div class="conversation-mode">
+              <div class="mode-buttons" role="group" aria-label="대화 방식 선택">
+                <button type="button" id="mode-text" aria-pressed="true"><svg aria-hidden="true"><use href="#i-chat"/></svg>글로 대화</button>
+                <button type="button" id="mode-voice" aria-pressed="false" disabled><svg aria-hidden="true"><use href="#i-mic"/></svg>말로 대화</button>
+              </div>
+              <p id="mode-description">글을 입력하고 보내기를 눌러 주세요. 대화 중에도 방식을 바꿀 수 있어요.</p>
+            </div>
             <div class="composer-footer" id="composer-help">
-              <p class="ai-disclaimer">AI 답변은 틀릴 수 있어요. 건강 판단은 의료진과 상의해 주세요.</p>
+              <p class="ai-disclaimer">온담은 AI예요. 출처는 각 답변 아래에서 확인하세요.</p>
               <button type="button" id="open-info" class="info-link" aria-haspopup="dialog" aria-controls="info-dialog">이용 안내</button>
               <span class="key-hint">Enter 전송 · Shift + Enter 줄바꿈</span>
             </div>
@@ -182,6 +184,11 @@
     <div class="info-content">
       <div class="info-heading"><h2 id="info-title">온담 정보·개인정보 안내</h2><button type="button" id="close-info" class="text-button" autofocus>닫기</button></div>
       <section><h3>AI 답변과 출처</h3><p>온담은 AI로, 답변에 오류나 오래된 정보가 있을 수 있어요. 생활 돌봄 정보를 돕지만 의료진을 대신하지 않아요. 공개 데이터와 공식 기관의 자료를 참고하더라도, 원자료의 한계나 정제·검색·답변 생성 과정에서 오류가 생길 수 있어요. 출처 표시는 정확성이나 최신성을 보장하지 않아요.</p><p>진단, 약의 복용량 변경·중단, 검사 필요성 등 개인별 판단은 의사·약사 등 의료전문가와 상의해 주세요. 응급 상황에는 채팅을 기다리지 말고 직접 119에 전화해 주세요. 온담은 신고하거나 위치를 전송하지 않아요.</p></section>
+      <section id="source-reuse-info" aria-labelledby="source-reuse-title" hidden>
+        <h3 id="source-reuse-title">자료 출처·이용조건</h3>
+        <p>답변에서 인용한 자료의 권리 고지예요. 각 조건은 해당 자료와 번역·가공한 부분에 적용돼요.</p>
+        <div id="source-reuse-notices"></div>
+      </section>
       <section><h3>질문과 대화의 처리</h3><p>답변을 만들기 위해 질문과 최근 대화가 외부 AI 응답·자료 검색 서비스로 전송돼요. 일부 개인정보 패턴을 가리지만 완전한 익명화를 보장하지는 않아요. 이름, 연락처, 상세 주소, 주민등록번호는 입력하지 말아 주세요.</p><p>대화 이력은 현재 브라우저 메모리에서 유지되며 새로고침이나 새로운 대화로 지울 수 있어요. 앱 서버는 대화·음성을 상담 이력으로 보관하지 않아요. 요청 처리에는 메모리나 임시 파일이 사용될 수 있어요. 외부 처리 서비스의 데이터 처리·보존 정책은 별도로 적용돼요.</p></section>
       <section><h3>공식 건강정보와 답변</h3><p>건강 질문에 관련된 질병관리청 자료를 콘텐츠 번호로 조회해 기존 참고자료와 함께 AI 답변의 근거로 사용해요. 질문이나 대화 이력은 이 요청에 포함하지 않아요. 관련 본문 발췌는 답변 생성을 위해 외부 AI 응답 서비스로 전송돼요.</p><p>답변의 출처 링크와 별도의 원문 보기에서 자료를 확인할 수 있어요. 원문 보기의 텍스트는 AI가 재작성한 답변이 아니에요. 같은 자료의 반복 요청을 줄이기 위해 서버 메모리에 최대 1시간 보관할 수 있어요. 표·그림·영상과 전체 내용은 원문 링크에서 확인해 주세요. 자료의 출처와 이용조건은 각 항목에 표시해요.</p></section>
       <section><h3>텍스트와 음성 대화</h3>

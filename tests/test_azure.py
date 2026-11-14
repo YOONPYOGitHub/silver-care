@@ -20,7 +20,13 @@ def test_system_instructions_are_a_single_current_audience_policy():
     assert "별도 언급이 없으면 이용자 본인의 이야기로 답하세요." in SYSTEM_PROMPT
     assert "가장 최근 질문의 대상을 따르세요." in SYSTEM_PROMPT
     assert "직원의 업무를 이용자의 할 일로 바꾸지 마세요." in SYSTEM_PROMPT
-    assert "실행할 일은 1~3가지" in SYSTEM_PROMPT
+    assert "질문의 복잡도, 이용자가 요청한 설명 수준과 대화 맥락" in SYSTEM_PROMPT
+    assert "요청한 항목을 빠짐없이" in SYSTEM_PROMPT
+    assert "단계·적용 조건·이유·구체적인 예시" in SYSTEM_PROMPT
+    assert "이해와 실행에 필요한 설명을 생략하지" in SYSTEM_PROMPT
+    assert "간단한 사실이나 연락처만" in SYSTEM_PROMPT
+    assert "반드시 해당 official_api 자료의 인용 번호" in SYSTEM_PROMPT
+    assert "실행할 일은 1~3가지" not in SYSTEM_PROMPT
     assert "2~4가지" not in SYSTEM_PROMPT
     assert "업데이트" not in SYSTEM_PROMPT
     assert SYSTEM_PROMPT.count("당신은 ") == 1
@@ -294,5 +300,101 @@ async def test_dataset_knowledge_is_cited_with_clear_provenance_and_notice():
         assert result.sources[0].source_year == "2024"
         assert "전문가 검토 전" in result.notice
         assert "데이터셋 안내" in result.notice
+    finally:
+        await service.close()
+
+
+async def test_cited_who_source_exposes_original_and_adaptation_license_notices():
+    def handler(request):
+        body = json.loads(request.content)
+        if "/docs/search" in str(request.url):
+            if "dialogue" in body["filter"]:
+                return httpx.Response(200, json={"value": []})
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "who",
+                            "title": "WHO ICOPE",
+                            "content": "Synthetic provider-facing integrated-care reference.",
+                            "source_url": "https://www.who.int/publications/i/item/9789240103726",
+                            "updated_at": "2025-09-22",
+                            "evidence_kind": "reference",
+                            "dataset_id": "who-icope-2025",
+                            "license": "Original CC BY-NC-SA 3.0 IGO",
+                            "audience": "provider",
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {"content": [{"type": "output_text", "text": "근거를 확인한 안내입니다. [1]"}]}
+                ],
+            },
+        )
+
+    service = make_services(handler)
+    service.settings.noncommercial_data_use = True
+    try:
+        result = await service.chat(ChatRequest(message="생활 지원 계획을 세우고 싶어요."))
+        source = result.sources[0]
+        assert source.license == "Original CC BY-NC-SA 3.0 IGO"
+        assert source.license_url == "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+        assert "not created by WHO" in source.reuse_notice
+        assert "비상업적" in source.reuse_notice
+        assert "original English" in source.reuse_notice
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("kind", ["reference", "dataset_knowledge"])
+async def test_medical_reply_adds_one_compact_display_notice_and_keeps_raw_api_guidance(kind):
+    from silvercare.safety import MEDICAL_CAUTION, MEDICAL_DISPLAY_NOTICE
+
+    def handler(request):
+        body = json.loads(request.content)
+        if "/docs/search" in str(request.url):
+            if "dialogue" in body["filter"]:
+                return httpx.Response(200, json={"value": []})
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "title": "Synthetic",
+                            "content": "Synthetic factual reference.",
+                            "source_url": "https://example.test/source",
+                            "updated_at": "2026-11-14",
+                            "evidence_kind": kind,
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "completed",
+                "output": [
+                    {"content": [{"type": "output_text", "text": "일반적인 검사 안내입니다. [1]"}]}
+                ],
+            },
+        )
+
+    service = make_services(handler)
+    try:
+        result = await service.chat(ChatRequest(message="검사 정보를 알고 싶어요."))
+        assert result.medical_caution == MEDICAL_CAUTION
+        assert result.display_notice.startswith(MEDICAL_DISPLAY_NOTICE)
+        assert result.notice != result.display_notice
+        if kind == "dataset_knowledge":
+            assert "AI Hub" in result.notice
+            assert "AI Hub" in result.display_notice
+            assert "전문가 검토 전" in result.display_notice
+        assert len(result.display_notice) < len(result.notice) + len(result.medical_caution)
     finally:
         await service.close()

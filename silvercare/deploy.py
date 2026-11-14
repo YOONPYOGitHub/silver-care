@@ -143,7 +143,10 @@ def kubernetes_resources(
             "REWRITE_QUERIES",
             "SEMANTIC_RANKING",
         }
-        if set(retrieval) != allowed:
+        if not allowed <= set(retrieval) or set(retrieval) - (
+            allowed
+            | {"PREFER_OFFICIAL_REFERENCES", "NONCOMMERCIAL_DATA_USE", "CONTEXTUAL_RETRIEVAL"}
+        ):
             raise ValueError("Invalid verified retrieval release settings")
         config.update(retrieval)
     security = {

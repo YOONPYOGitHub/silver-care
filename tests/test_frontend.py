@@ -55,9 +55,11 @@ class Element extends EventTarget {
   append(...children) {
     for (const child of children) {
       child.parent = this;
+      if (this.childContentTop !== undefined) child.contentTop = this.childContentTop;
       this.childNodes.push(child);
     }
   }
+  get parentNode() { return this.parent ?? null; }
   get lastChild() { return this.childNodes.at(-1); }
   get lastElementChild() { return this.lastChild; }
   setAttribute(name, value) { this.attributes.set(name, value); }
@@ -71,7 +73,14 @@ class Element extends EventTarget {
   }
   closest() { return null; }
   scrollIntoView() {}
-  getBoundingClientRect() { return { top: this.rectTop ?? 0 }; }
+  getBoundingClientRect() {
+    const scroll = this.parent?.scrollContainer;
+    return {
+      top: this.rectTop ?? (scroll
+        ? (scroll.rectTop ?? 0) + (this.contentTop ?? scroll.scrollHeight) - scroll.scrollTop
+        : 0),
+    };
+  }
   scrollTo(options) {
     this.scrollTop = Math.max(0, Math.min(options.top, this.scrollHeight - this.clientHeight));
     this.scrollCalls += 1;
@@ -98,6 +107,7 @@ function fixture(settings = {}) {
   document.documentElement = new Element("html");
   document.documentElement.style.setProperty = function (key, value) { this[key] = value; };
   document.getElementById = element;
+  element("messages").scrollContainer = element("conversation-scroll");
   document.createElement = () => new Element();
   document.createElementNS = () => new Element();
   document.createTextNode = (text) => {
@@ -146,6 +156,7 @@ function fixture(settings = {}) {
   const timers = new Map();
   const lifecycle = new EventTarget();
   const createdURLs = [];
+  const resizeObservers = [];
   const visualViewport = new EventTarget();
   visualViewport.height = 700;
   visualViewport.offsetTop = 0;
@@ -212,6 +223,13 @@ function fixture(settings = {}) {
   const context = vm.createContext({
     console, Blob, FormData, Event, AbortController, Float32Array,
     visualViewport,
+    requestAnimationFrame: (callback) => setImmediate(callback),
+    ResizeObserver: class {
+      constructor(callback) {
+        this.callback = callback; this.targets = []; resizeObservers.push(this);
+      }
+      observe(target) { this.targets.push(target); }
+    },
     MediaRecorder: settings.noRecorder ? undefined : Recorder,
     AudioContext: settings.noAudio ? undefined : AudioContext,
     document,
@@ -272,6 +290,7 @@ function fixture(settings = {}) {
     stopAudio: vm.runInContext("stopAudio", context),
     pause: vm.runInContext("pauseVoice", context),
     focusCalls: () => focusCalls,
+    resize() { resizeObservers.forEach((observer) => observer.callback()); },
     plays: () => plays,
     setRMS(value) { rms = value; },
     setDecode(handler) { decode = handler; },
@@ -437,6 +456,178 @@ app.element("new-chat").click();
 assert.equal(scroll.scrollTop, 0);
 assert.equal(app.element("new-answer").hidden, true);
 assert.equal(app.state.history.length, 0);
+""")
+
+    def test_mobile_viewport_resize_keeps_latest_without_mistaking_layout_for_browsing(self):
+        self.run_javascript(r"""
+const scroll = app.element("conversation-scroll");
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 0, "Opening the welcome screen must not jump to the bottom");
+await app.send("모바일 대화입니다.");
+await app.flush();
+scroll.clientHeight = 220;
+scroll.dispatchEvent(new Event("scroll"));
+app.visualViewport.height = 400;
+app.visualViewport.dispatchEvent(new Event("resize"));
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 780, "Follow the bottom after the keyboard reduces the viewport");
+assert.equal(app.element("new-answer").hidden, true);
+scroll.scrollHeight = 1500;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 1280, "Follow asynchronous content growth");
+scroll.clientHeight = 500;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 1000, "Keep latest after closing the keyboard");
+""")
+
+    def test_reader_position_and_topics_survive_resizes_and_pending_follow_frames(self):
+        self.run_javascript(r"""
+await app.send("기존 대화입니다.");
+await app.flush();
+const scroll = app.element("conversation-scroll");
+scroll.scrollTop = 100;
+scroll.dispatchEvent(new Event("scroll"));
+scroll.clientHeight = 200;
+app.visualViewport.height = 350;
+app.visualViewport.dispatchEvent(new Event("resize"));
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 100, "Keyboard changes must not pull a reader to the bottom");
+app.element("new-answer").click();
+scroll.scrollTop = 90;
+scroll.dispatchEvent(new Event("scroll"));
+await app.flush();
+assert.equal(scroll.scrollTop, 90, "User scrolling must cancel a queued follow");
+app.navLinks[1].click();
+const topicPosition = scroll.scrollTop;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, topicPosition, "Topics navigation must not snap back to the chat");
+app.element("new-chat").click();
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 0, "Reset must preserve the welcome position");
+""")
+
+    def test_delayed_mobile_reply_follows_after_viewport_and_input_height_changes(self):
+        self.run_javascript(r"""
+const delayed = deferred();
+app.respond("/api/chat", () => delayed.promise);
+app.navLinks[1].click();
+const sending = app.send("주제에서 질문합니다.");
+await app.flush();
+const scroll = app.element("conversation-scroll");
+assert.equal(app.navLinks[0].getAttribute("aria-current"), "location");
+scroll.clientHeight = 180;
+scroll.dispatchEvent(new Event("scroll"));
+app.element("message").dispatchEvent(new Event("input"));
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 820);
+scroll.scrollHeight = 1800;
+delayed.resolve(app.json(app.answer("길어진 모바일 답변입니다.")));
+await sending;
+await app.flush();
+assert.equal(scroll.scrollTop, 1620);
+assert.equal(app.element("new-answer").hidden, true);
+""")
+
+    def test_touch_reading_during_keyboard_resize_overrides_the_pending_follow(self):
+        self.run_javascript(r"""
+await app.send("모바일 대화입니다.");
+await app.flush();
+const scroll = app.element("conversation-scroll");
+scroll.clientHeight = 220;
+app.resize();
+scroll.dispatchEvent(new Event("touchmove"));
+scroll.scrollTop = 90;
+scroll.dispatchEvent(new Event("scroll"));
+await app.flush();
+assert.equal(scroll.scrollTop, 90, "An actual reading gesture wins over concurrent layout changes");
+""")
+
+    def test_long_reply_opens_at_its_start_and_stays_there_when_footer_and_viewport_change(self):
+        self.run_javascript(r"""
+const scroll = app.element("conversation-scroll");
+scroll.scrollHeight = 3000;
+app.element("messages").childContentTop = 800;
+await app.send("여러 항목을 자세히 설명해 주세요.");
+await app.flush();
+assert.equal(scroll.scrollTop, 784, "Open the answer start, not its citations at the bottom");
+assert.equal(app.element("messages").lastElementChild.getBoundingClientRect().top, 16);
+assert.equal(app.element("new-answer").hidden, true);
+scroll.scrollHeight = 4500;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 784, "Additional sources must not move the answer out of view");
+scroll.clientHeight = 180;
+app.visualViewport.height = 350;
+app.visualViewport.dispatchEvent(new Event("resize"));
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 784, "Keyboard changes preserve the answer start");
+scroll.clientHeight = 650;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 784);
+assert.equal(app.element("messages").lastElementChild.getBoundingClientRect().top, 16);
+""")
+
+    def test_reading_down_a_long_answer_is_not_pulled_back_and_new_answer_opens_its_start(self):
+        self.run_javascript(r"""
+const scroll = app.element("conversation-scroll");
+scroll.scrollHeight = 3000;
+app.element("messages").childContentTop = 800;
+await app.send("긴 답변을 읽겠습니다.");
+await app.flush();
+scroll.dispatchEvent(new Event("touchmove"));
+scroll.scrollTop = 1000;
+scroll.dispatchEvent(new Event("scroll"));
+scroll.clientHeight = 250;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 1000, "Manual reading wins over the start anchor");
+const delayed = deferred();
+app.respond("/api/chat", () => delayed.promise);
+app.element("messages").childContentTop = 2000;
+const sending = app.send("다음 답변도 자세히 알려주세요.");
+await app.flush();
+scroll.dispatchEvent(new Event("wheel"));
+scroll.scrollTop = 1100;
+scroll.dispatchEvent(new Event("scroll"));
+delayed.resolve(app.json(app.answer("새로 온 긴 답변입니다.")));
+await sending;
+await app.flush();
+assert.equal(scroll.scrollTop, 1100);
+assert.equal(app.element("new-answer").hidden, false);
+app.element("new-answer").click();
+await app.flush();
+assert.equal(scroll.scrollTop, 1984, "The new-answer action opens the reply, not the page bottom");
+assert.equal(app.element("new-answer").hidden, true);
+assert.equal(app.state.history.length, 4);
+""")
+
+    def test_short_answer_fits_and_opening_official_material_does_not_force_a_jump(self):
+        self.run_javascript(r"""
+const scroll = app.element("conversation-scroll");
+scroll.scrollHeight = 1000;
+app.element("messages").childContentTop = 800;
+await app.send("전화번호만 알려주세요.");
+await app.flush();
+assert.equal(scroll.scrollTop, 500, "Clamp short replies to the available content");
+app.element("messages").dispatchEvent(new Event("toggle"));
+scroll.scrollHeight = 2500;
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 500, "Opening original material must preserve the reading position");
+app.element("new-chat").click();
+app.resize();
+await app.flush();
+assert.equal(scroll.scrollTop, 0, "Reset clears a pending answer anchor");
 """)
 
     def test_settings_dialog_pauses_voice_retains_history_and_does_not_restart_on_close(self):
@@ -689,6 +880,94 @@ for (let i = 0; i < 7; i++) await app.send(`질문 ${i}`);
 assert.equal(app.state.history.length, 12);
 assert.equal(app.state.history[0].content, "질문 1");
 assert.equal(JSON.parse(app.requests.at(-1).options.body).history.length, 12);
+""")
+
+    def test_who_license_moves_to_info_without_repeating_in_the_conversation(self):
+        self.run_javascript(r"""
+const result = app.answer("기능 저하에 관한 안내입니다. [1]");
+result.sources = [{
+  id: 1, title: "WHO ICOPE", url: "https://www.who.int/publications/i/item/9789240103726",
+  excerpt: "원문 발췌", updated_at: "2025-09-22",
+  reuse_notice: "WHO 원문, 비상업적 이용. 원문과 온담의 번역·가공을 구분합니다.",
+  license_url: "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+}];
+result.sources.push({ ...result.sources[0], id: 2, title: "WHO ICOPE 다른 쪽" });
+app.respond("/api/chat", async () => app.json(result));
+await app.send("기능 저하가 궁금해요.");
+const find = (node, name) => node.className === name ? node
+  : node.childNodes.map(child => find(child, name)).find(Boolean);
+const notice = app.element("source-reuse-notices").childNodes[0];
+assert.match(notice.textContent, /비상업적/);
+assert.match(notice.textContent, /번역·가공/);
+assert.equal(notice.childNodes[0].href, result.sources[0].license_url);
+const sourceContainer = find(app.element("messages"), "sources");
+assert.equal(sourceContainer.childNodes.length, 2);
+assert.equal(sourceContainer.childNodes[0].className, "source-link");
+assert.equal(sourceContainer.childNodes[1].className, "source-link");
+assert.equal(sourceContainer.childNodes[0].href, result.sources[0].url);
+assert.equal(find(app.element("messages"), "source-reuse-notice"), undefined);
+assert.equal(app.element("source-reuse-info").hidden, false);
+app.element("open-info").click();
+assert.equal(app.element("info-dialog").open, true);
+app.element("close-info").click();
+await app.send("다른 질문입니다.");
+assert.equal(app.element("source-reuse-notices").childNodes.length, 1);
+""")
+
+    def test_medical_reply_shows_one_combined_notice_and_keeps_official_cards(self):
+        self.run_javascript(r"""
+const result = app.answer("건강에 관한 안내입니다.");
+result.notice = "기존 일반 AI 안내";
+result.medical_caution = "기존 상세 의료 주의";
+result.display_notice = "AI 답변에는 오류가 있을 수 있어요. 복약 변경은 의료진과 상의해 주세요.";
+result.health_topics = [{ id: "6752", title: "건강노화",
+  url: "https://health.kdca.go.kr/healthinfo/view.do?cntnts_sn=6752" }];
+app.respond("/api/chat", async () => app.json(result));
+await app.send("건강노화가 궁금해요.");
+const all = (node) => [node, ...node.childNodes.flatMap(all)];
+const nodes = all(app.element("messages"));
+const notices = nodes.filter(
+  node => ["medical-caution", "message-notice"].includes(node.className)
+);
+assert.equal(notices.length, 1);
+assert.equal(notices[0].className, "medical-caution");
+assert.equal(notices[0].childNodes[1].textContent, result.display_notice);
+assert.equal(nodes.filter(node => node.className === "official-health-card").length, 1);
+assert(!nodes.some(node => node.textContent === result.notice));
+const redundantHint = "함께 확인할 공식 자료예요. 진단 결과나 개인별 권고는 아니에요.";
+assert(!nodes.some(node => node.textContent === redundantHint));
+assert.equal(app.count("/api/health-info/6752"), 0,
+  "Opening the answer must not fetch original text");
+""")
+
+    def test_legacy_medical_reply_keeps_custom_caution_without_a_second_generic_notice(self):
+        self.run_javascript(r"""
+const result = app.answer("건강 안내입니다.");
+result.notice = "기존 일반 안내";
+result.medical_caution = "보존해야 하는 별도 의료 주의입니다.";
+app.respond("/api/chat", async () => app.json(result));
+await app.send("질문입니다.");
+const all = (node) => [node, ...node.childNodes.flatMap(all)];
+const notices = all(app.element("messages")).filter(
+  node => ["medical-caution", "message-notice"].includes(node.className)
+);
+assert.equal(notices.length, 1);
+assert.equal(notices[0].childNodes[1].textContent, result.medical_caution);
+""")
+
+    def test_nonmedical_reply_keeps_one_general_notice(self):
+        self.run_javascript(r"""
+const result = app.answer("일상 대화입니다.");
+result.display_notice = "AI 답변에는 오류가 있을 수 있어요.";
+app.respond("/api/chat", async () => app.json(result));
+await app.send("오늘은 기분이 좋아요.");
+const all = (node) => [node, ...node.childNodes.flatMap(all)];
+const notices = all(app.element("messages")).filter(
+  node => ["medical-caution", "message-notice"].includes(node.className)
+);
+assert.equal(notices.length, 1);
+assert.equal(notices[0].className, "message-notice");
+assert.equal(notices[0].textContent, result.display_notice);
 """)
 
     def test_silence_needs_minimum_speech_and_three_second_trailing_pause(self):

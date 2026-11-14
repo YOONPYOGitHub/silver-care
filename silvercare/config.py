@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     embedding_dimensions: int = Field(default=512, ge=256, le=1536)
     semantic_ranking: bool = False
     rewrite_queries: bool = False
+    prefer_official_references: bool = False
+    noncommercial_data_use: bool = False
+    contextual_retrieval: bool = False
     azure_speech_endpoint: str = "https://ai-foundry-m098047.cognitiveservices.azure.com"
     azure_speech_resource_id: str = ""
     azure_speech_region: str = "koreacentral"

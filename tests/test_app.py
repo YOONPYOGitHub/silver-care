@@ -65,6 +65,10 @@ def test_ui_and_headers(config, services):
         assert 'id="new-answer"' in response.text
         assert 'id="info-dialog"' in response.text
         assert 'id="open-info"' in response.text
+        assert 'id="source-reuse-info"' in response.text
+        assert 'id="source-reuse-notices"' in response.text
+        assert "자료 출처·이용조건" in response.text
+        assert "온담은 AI예요. 출처는 각 답변 아래에서 확인하세요." in response.text
         assert 'class="family-examples"' in response.text
         assert 'id="health-library"' in response.text
         assert 'id="health-topic"' in response.text
@@ -203,6 +207,17 @@ def test_upstream_error_is_explicit(config, services):
         response = client.post("/api/chat", json={"message": "도움"})
         assert response.status_code == 503
         assert "자료 검색" in response.json()["detail"]
+
+
+def test_provider_safety_refusal_is_an_explicit_error_not_a_medical_answer(config, services):
+    services.chat.side_effect = UpstreamError("model", 400, code="content_filter")
+    with TestClient(create_app(config, services)) as client:
+        response = client.post("/api/chat", json={"message": "약 복용 여부가 궁금해요."})
+        assert response.status_code == 422
+        assert response.json()["code"] == "safety_refusal"
+        assert "안전 정책" in response.json()["detail"]
+        assert "의료진" in response.json()["detail"]
+        assert "answer" not in response.json()
 
 
 def test_unrecognized_speech_uses_conversation_language(config, services):
