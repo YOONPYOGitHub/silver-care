@@ -180,7 +180,11 @@ Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge
 초기 단일 질문 smoke에서 모델 단독은 약 6.6초, CPU 재정렬을 포함한 RAG는
 복지 문의 약 86초, 낙상 문의 약 188초였다.
 이는 특정 질문·서버 설정의 단발 측정이며 일반 성능·의학 정확도·휴대폰 속도를 나타내지 않는다.
-화면에 RAG의 수 분 대기 가능성을 알리며 요청 취소와 600초 비교용 제한을 유지한다.
+버전별 설명 배너나 모델명은 화면 상단에 표시하지 않으며 요청 취소와 600초 비교용 제한은 유지한다.
+
+프론트엔드만 수정하면서 평가 중인 backend를 그대로 유지하려면
+`infra/Dockerfile.ui`의 `BASE_IMAGE`에 해당 버전의 검증된 이미지 digest를 지정한다.
+이 target은 HTML·CSS·JavaScript만 교체한다. backend가 다른 앱의 base image를 혼용하지 않는다.
 
 ## 2. 로컬 실행
 

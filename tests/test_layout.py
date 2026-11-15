@@ -30,6 +30,17 @@ class LayoutParser(HTMLParser):
             self.stack.pop()
 
 
+def test_internal_variant_information_is_not_rendered_in_the_header_or_banner():
+    root = Path(__file__).resolve().parents[1] / "silvercare/static"
+    html = (root / "index.html").read_text()
+    script = (root / "app.js").read_text()
+    styles = (root / "styles.css").read_text()
+    assert "variant-notice" not in html + script + styles
+    for label in ("비교 실험", "소형 모델·RAG", "소형 모델 단독", "소형 모델·Azure 검색"):
+        assert label not in html + script
+    assert "state.config.service_variant" not in script
+
+
 def test_scroll_and_dock_are_separate_balanced_regions_with_unique_controls():
     root = Path(__file__).resolve().parents[1]
     parser = LayoutParser()

@@ -1,0 +1,3 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY silvercare/static/app.js silvercare/static/index.html silvercare/static/styles.css /app/silvercare/static/

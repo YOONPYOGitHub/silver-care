@@ -268,7 +268,7 @@ function fixture(settings = {}) {
       }
       if (path === "/api/config") return json({
         voice_enabled: settings.voiceEnabled ?? true,
-        search_enabled: true, health_info_enabled: false,
+        search_enabled: settings.searchEnabled ?? true, health_info_enabled: false,
         service_variant: settings.variant ?? "azure",
         request_timeout_ms: settings.requestTimeout ?? 120000,
       });
@@ -410,23 +410,30 @@ await app.send("서비스 구분 확인입니다.");
 assert.equal(app.requests[0].path, "/local-rag/api/chat");
 const reply = app.element("messages").lastElementChild;
 assert.equal(reply.childNodes[0].src, "/local-rag/static/mark.svg");
-assert.equal(app.element("variant-notice").hidden, false);
-assert(app.element("variant-notice").textContent.includes("Azure"));
+assert.equal(app.element("status").lastChild.textContent, "상담 준비 완료");
 assert.equal(app.permissions.length, 0);
 """,
             '{basePath: "/local-rag", variant: "local-rag", requestTimeout: 600000}',
         )
 
-    def test_qwen_azure_profile_label_and_requests_do_not_use_the_model_only_mode(self):
+    def test_qwen_azure_requests_keep_their_prefix_without_a_profile_label(self):
         self.run_javascript(
             r"""
 await app.send("서비스 구분 확인입니다.");
 assert.equal(app.requests[0].path, "/qwen-azure-rag/api/chat");
-assert(app.element("variant-notice").textContent.includes("Azure 자료 검색"));
-assert(!app.element("variant-notice").textContent.includes("검색 없이"));
-assert(app.element("status").lastChild.textContent.includes("Azure 검색"));
+assert.equal(app.element("status").lastChild.textContent, "상담 준비 완료");
 """,
             '{basePath: "/qwen-azure-rag", variant: "qwen-azure-rag", requestTimeout: 600000}',
+        )
+
+    def test_model_only_uses_the_same_ready_header_without_exposing_search_mode(self):
+        self.run_javascript(
+            r"""
+assert.equal(app.element("status").lastChild.textContent, "상담 준비 완료");
+await app.send("공통 화면 확인입니다.");
+assert.equal(app.requests[0].path, "/local-only/api/chat");
+""",
+            '{basePath: "/local-only", variant: "local-only", searchEnabled: false}',
         )
 
     def test_complete_voice_turn_uses_shared_memory_and_waits_for_playback_end(self):

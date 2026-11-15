@@ -1072,18 +1072,7 @@ async function initializeHealthLibrary() {
 async function initialize() {
   try {
     state.config = await (await api("/api/config")).json();
-    $("status").lastChild.textContent = state.config.search_enabled ? "상담 준비 완료" : "일반 대화 모드";
-    if (state.config.service_variant && state.config.service_variant !== "azure") {
-      const rag = state.config.service_variant === "local-rag";
-      const azureRag = state.config.service_variant === "qwen-azure-rag";
-      $("status").lastChild.textContent = azureRag ? "소형 모델·Azure 검색" : rag ? "소형 모델·RAG" : "소형 모델 단독";
-      $("variant-notice").hidden = false;
-      $("variant-notice").textContent = azureRag
-        ? "비교 실험 · 같은 소형 모델과 기존 Azure 자료 검색·재정렬을 사용해요. 공식 건강정보 API와 음성은 유지해요."
-        : rag
-        ? "비교 실험 · Azure에 호스팅한 소형 모델과 자체 자료 검색을 사용해요. 공식 건강정보 API와 음성은 유지하며, 자료 재정렬에 수 분이 걸릴 수 있어요."
-        : "비교 실험 · Azure에 호스팅한 같은 소형 모델이 검색 없이 답해요. 모델 지식 기반이며 음성은 유지해요.";
-    }
+    $("status").lastChild.textContent = "상담 준비 완료";
     updateVoiceControls();
     if (!voiceAvailable()) {
       $("mode-description").textContent = "이 환경에서는 음성 대화를 사용할 수 없어요. 글로 대화해 주세요.";

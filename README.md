@@ -16,6 +16,8 @@
 | Qwen + Azure RAG | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/qwen-azure-rag/> | 같은 Qwen3.5-4B + 기존 Azure AI Search·512차원 임베딩·semantic 재정렬 |
 
 하나의 코드베이스에서 `SERVICE_VARIANT`와 독립 Deployment·Service·URL로 구분한다.
+화면 상단에는 버전·모델·검색 공급자 구분을 표시하지 않고 같은 공통 헤더를 사용한다.
+내부 구성은 URL과 운영 설정으로 구분하며 답변 출처·의료 주의 안내는 유지한다.
 Azure 기준 서비스의 배포 이미지는 `azure-baseline-20261116-3b2c666`으로 유지한다.
 비교 기능은 `feature/foundry-model-comparison` 브랜치에서 관리하며 자동으로 main에 병합하지 않는다.
 네 버전 모두 Azure STT/TTS와 공통 응급 안내·개인정보 최소화·화면 기능을 사용한다.
