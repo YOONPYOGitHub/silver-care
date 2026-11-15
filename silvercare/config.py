@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     public_origin: str = "http://localhost:8000"
-    service_variant: Literal["azure", "local-rag", "local-only"] = "azure"
+    service_variant: Literal["azure", "local-rag", "local-only", "qwen-azure-rag"] = "azure"
     base_path: str = Field(default="", pattern=r"^(?:/[a-z][a-z0-9-]*)?$")
     local_llm_endpoint: str = ""
     local_llm_model: str = "qwen3.5-4b"
@@ -99,7 +99,7 @@ class Settings(BaseSettings):
         ):
             raise ValueError("Evaluation traces require a separate token of at least 32 characters")
         if (
-            self.service_variant == "azure"
+            self.service_variant in {"azure", "qwen-azure-rag"}
             and self.retrieval_mode == "hybrid"
             and not self.azure_embedding_deployment
         ):
@@ -108,6 +108,15 @@ class Settings(BaseSettings):
             raise ValueError("Local variants require LOCAL_LLM_ENDPOINT")
         if self.service_variant != "azure" and not self.local_llm_model.strip():
             raise ValueError("Comparison variants require a model alias")
+        if self.service_variant == "qwen-azure-rag" and not all(
+            (
+                self.azure_search_endpoint.strip(),
+                self.azure_search_index.strip(),
+                self.azure_search_case_index.strip(),
+                self.azure_embedding_deployment.strip(),
+            )
+        ):
+            raise ValueError("Qwen Azure RAG requires Azure Search indexes and embedding settings")
         if self.service_variant == "local-rag" and not all(
             (
                 self.local_search_endpoint,
@@ -126,7 +135,10 @@ class Settings(BaseSettings):
         if self.app_env == "production":
             if not self.public_origin.startswith("https://"):
                 raise ValueError("Production requires an HTTPS PUBLIC_ORIGIN")
-            if self.service_variant == "azure" and not self.azure_search_endpoint:
+            if (
+                self.service_variant in {"azure", "qwen-azure-rag"}
+                and not self.azure_search_endpoint
+            ):
                 raise ValueError("Production requires AZURE_SEARCH_ENDPOINT")
         return self
 

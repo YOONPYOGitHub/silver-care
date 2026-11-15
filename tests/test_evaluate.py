@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from silvercare import evaluate
+from silvercare.azure import UpstreamError
 from silvercare.models import ChatRequest, ChatResponse, Source
 from tests.test_azure import make_services
 
@@ -18,6 +19,71 @@ def test_medical_targets_can_require_an_exact_provenance_url() -> None:
     assert not evaluate.relevant(
         {"source_record_id": "371", "source_url": "https://example.test/unrelated"}, target
     )
+
+
+async def test_model_only_retrieval_is_explicitly_not_applicable(tmp_path):
+    source = tmp_path / "retrieval.json"
+    source.write_text(json.dumps({"queries": [{"query": "건강 안내"}]}))
+    service = make_services(lambda _: pytest.fail("No network for no-RAG retrieval"))
+    service.settings.service_variant = "local-only"
+    service.search = AsyncMock(side_effect=AssertionError("No hidden retrieval"))
+    report = await evaluate.evaluate(source, tmp_path / "result.json", services=service)
+    assert report["status"] == "not_applicable" and report["queries"] == []
+    service.search.assert_not_awaited()
+
+
+async def test_retrieval_keeps_failures_and_finishes_every_query(tmp_path):
+    source = tmp_path / "retrieval.json"
+    source.write_text(json.dumps({"queries": [{"query": "질문 하나"}, {"query": "질문 둘"}]}))
+    service = make_services(lambda _: pytest.fail("No network in injected failure test"))
+    service.search = AsyncMock(side_effect=UpstreamError("search", 503))
+    report = await evaluate.evaluate(source, tmp_path / "result.json", services=service)
+    assert len(report["queries"]) == 2
+    assert report["metrics"]["hybrid"]["error_count"] == 2
+    assert report["metrics"]["keyword"]["error_count"] == 2
+    assert report["nonregression_passed"] is False
+
+
+@pytest.mark.parametrize("answer,passed", [("건강 정보를 안내합니다.", True), ("금지된 말", False)])
+async def test_no_rag_skips_only_evidence_checks_not_content_checks(
+    tmp_path, monkeypatch, answer, passed
+):
+    monkeypatch.chdir(tmp_path)
+    corpus = tmp_path / "data/processed/expanded"
+    corpus.mkdir(parents=True)
+    for name in ("knowledge.jsonl", "cases.jsonl"):
+        (corpus / name).write_text("{}\n")
+    scenarios = tmp_path / "scenarios.json"
+    scenarios.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "id": "no-rag",
+                        "request": {"message": "안내해주세요."},
+                        "forbidden": ["금지된 말"],
+                        "required_source_url": "https://example.test/guide",
+                        "expected_mode": "grounded",
+                        "required_model_source_urls": ["https://example.test/guide"],
+                    }
+                ]
+            }
+        )
+    )
+    service = make_services(lambda _: pytest.fail("Use captured response"))
+    service.settings.service_variant = "local-only"
+    service.chat = AsyncMock(
+        return_value=ChatResponse(
+            answer=answer,
+            sources=[],
+            mode="conversation",
+            notice="모델 지식 기반",
+        )
+    )
+    report = await evaluate.evaluate_audience(scenarios, tmp_path / "result.json", services=service)
+    assert report["retrieval_checks_applicable"] is False
+    assert report["cases"][0]["passed"] is passed
+    assert report["cases"][0]["seconds"] >= 0
 
 
 async def test_required_retrieval_target_failure_blocks_even_equal_keyword_and_hybrid(

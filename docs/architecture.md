@@ -35,19 +35,23 @@ AKS LoadBalancer → Caddy → FastAPI
  ├─ /local-rag/   → silvercare-local → Foundry gateway → Qwen 생성·임베딩
  │                                   ├─ OpenSearch BM25/HNSW → RRF → BGE 재정렬
  │                                   └─ 질병관리청 실행 API
- └─ /local-only/  → silvercare-local → 같은 gateway·Qwen 생성만 사용
-                                     검색·사례·임베딩·질병관리청 조회 없음
+ ├─ /local-only/  → silvercare-local → 같은 gateway·Qwen 생성만 사용
+ │                                   검색·사례·임베딩·질병관리청 조회 없음
+ └─ /qwen-azure-rag/ → 같은 gateway·Qwen 생성·검색어 확장
+                      + 기존 Azure 임베딩·AI Search·semantic 재정렬·질병관리청 API
 각 앱 → 기존 Azure Speech
 ```
 
-`azure`, `local-rag`, `local-only`는 코드 복사본이 아닌 설정 프로필이다.
+`azure`, `local-rag`, `local-only`, `qwen-azure-rag`는 코드 복사본이 아닌 설정 프로필이다.
 각 앱의 HTML·이미지·JavaScript·API는 해당 URL 접두사 안에서 동작한다.
-비교 앱은 생성 모델·검색 연결 오류 시 기존 GPT나 Azure AI Search로 우회하지 않는다.
+비교 앱은 생성 모델·검색 연결 오류 시 다른 생성·검색 공급자로 우회하지 않는다.
 모델 단독도 일반 학습 지식으로 답하도록 하며, 검색 근거가 없다는 이유로 답변을 강제로 막지 않는다.
 출처를 생성하지 않고 모델 지식 기반임을 표시하며 공통 응급·의료·개인정보 방침을 유지한다.
 
 `local-*`는 비교 프로필의 식별자이며 실제 오프라인·휴대폰 실행을 뜻하지 않는다.
 생성·임베딩은 Foundry 호스팅, 재정렬과 검색은 AKS 실행이다.
+`qwen-azure-rag`는 검색·재정렬도 Azure AI Search를 사용하므로 실제 오프라인 RAG가 아니다.
+같은 관리 ID로 기존 인덱스를 읽으며 baseline 앱·인덱스·임베딩을 갱신하지 않는다.
 클라우드 모델 정밀도와 휴대폰 양자화 모델, 서버와 휴대폰의 실행 자원은 동일하지 않다.
 
 평가용 추적은 서버 기능 플래그와 별도 토큰으로 승인된 `/api/chat` 요청에서만 응답에 추가한다.
@@ -112,9 +116,10 @@ AKS LoadBalancer → Caddy → FastAPI
 | --- | --- |
 | [app.py](../silvercare/app.py) | FastAPI·수명주기·라우트·출처 검증·요청 제한·오류 응답 |
 | [azure.py](../silvercare/azure.py) | 현재 시스템 지침·검색어 확장·질문 임베딩·검색·API 근거 결합·생성·인용 검증·음성 |
-| [local_services.py](../silvercare/local_services.py) | 소형 모델 RAG/단독 프로필, 공통 파이프라인의 생성·검색 교체 |
+| [local_services.py](../silvercare/local_services.py) | 공유 Qwen 생성, Azure Search RAG·OSS RAG·모델 단독 프로필 |
 | [foundry_gateway.py](../silvercare/foundry_gateway.py) | Workload Identity로 관리형 Qwen 추론, 응답 정규화·정확한 임베딩 토큰 한도 검증 |
 | [offline_search.py](../silvercare/offline_search.py) | OpenSearch 필터·BM25/HNSW·RRF·재정렬·부모 문맥 조회 |
+| [cpu_reranker.py](../silvercare/cpu_reranker.py) | 고정 BGE CPU 실행·길이순 비절단 batch·중복 score cache·모델 artifact 검증 |
 | [offline_ingest.py](../silvercare/offline_ingest.py) | 준비된 지식·사례의 신규 OpenSearch 인덱스 발행·holdout·벡터·수량 검증 |
 | [deploy_comparison.py](../silvercare/deploy_comparison.py) | 비교 namespace·배포·Foundry 모델 명세·기존 경로를 보존하는 Caddy 설정 |
 | [health.py](../silvercare/health.py) | 21개 허용 주제·주제 연결·질병관리청 XML·TLS·캐시·근거 문단 선별 |

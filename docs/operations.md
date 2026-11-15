@@ -41,11 +41,12 @@
 GET 요청의 `TOKEN`은 `httpx` 로그에서 가리고, 리다이렉트를 따라 전달하지 않는다.
 POST는 실제 404로 응답해 이 API에서 사용하지 않는다.
 
-## 세 가지 비교 서비스
+## 네 가지 비교 서비스
 
 기존 root URL의 앱 이미지는 `azure-baseline-20261116-3b2c666`으로 고정한다.
 비교 앱은 `silvercare-local` namespace의 독립 Deployment·Service와
-`/local-rag/`, `/local-only/` 경로를 사용한다. 기존 배포 명령으로 비교 이미지를 root 앱에 배포하지 않는다.
+`/local-rag/`, `/local-only/`, `/qwen-azure-rag/` 경로를 사용한다.
+기존 배포 명령으로 비교 이미지를 root 앱에 배포하지 않는다.
 
 ### Foundry 모델과 비용
 
@@ -76,13 +77,15 @@ gateway의 `/health`는 프로세스 상태이지 관리형 모델의 실제 준
 
 비교 노드 `localmem`은 `Standard_D8ds_v5` 1개(8 vCPU / 32GiB),
 label `workload=local-ai`, taint `workload=local-ai:NoSchedule`다.
-기존 system 노드 2개는 유지한다. OpenSearch 데이터와 reranker cache는 각각 8Gi PVC다.
-reranker는 requests 16Gi / limits 24Gi, OpenSearch는 heap 1Gi / limits 4Gi다.
-CPU-bound 재정렬은 requests 2 / limits 6 vCPU와 4개 runtime worker를 사용한다.
-재정렬은 HTTP당 최대 64개 후보를 받고, 두 동시 대화의 병렬 근거 검색을 위한
-256개 pair permit을 둔다. 실제 추론 batch token 한도는 8192로 별도 제한한다.
-재정렬 readiness는 warm-up 뒤 열리는 `/info`를 사용한다.
-추론을 직접 수행하는 `/health`를 반복 호출해 대기열이 긴 정상 요청 중 Service에서 제외하지 않는다.
+기존 system 노드 2개는 유지한다. OpenSearch 데이터는 8Gi PVC다.
+기존 TEI cache 8Gi PVC는 롤백용으로 보존하며 최적화 runtime은 고정 이미지의 모델을 읽는다.
+reranker는 requests 3Gi / limits 24Gi, OpenSearch는 heap 1Gi / limits 4Gi다.
+같은 BGE FP32 가중치를 ONNX Runtime 1.23.2, 6개 intra-op thread로 실행한다.
+유휴 thread spinning은 끄고 길이순 microbatch(최대 8개·padding 포함 8192 tokens)를 사용한다.
+HTTP당 64개 후보를 모두 처리하며 16개 HTTP 요청만 대기시킨다.
+중복 query/text pair는 SHA256 key와 score만 저장하는 process-local LRU(2048개)로 재사용한다.
+공식 근거와 일반 근거 검색이 겹쳐도 후보나 출처를 버리지 않고 모델 평가만 중복 제거한다.
+readiness `/info`는 추론 대기열 뒤에 다시 모델 계산을 추가하지 않는다.
 전체 문맥 warm-up의 OOM을 피하기 위한 서버 설정이며 휴대폰 메모리 요구량 측정치가 아니다.
 검색·재정렬은 Recreate 방식으로 업데이트해 단일 PVC·큰 warm-up 메모리의 중복 사용을 피한다.
 
@@ -97,9 +100,42 @@ uv run python -m silvercare.deploy_comparison deploy \
 이미지는 임베딩 tokenizer도 원본 revision과 SHA256으로 검증해 포함한다.
 로컬 gateway 실행은 같은 tokenizer를 준비하고 `FOUNDRY_EMBEDDING_TOKENIZER_PATH`를 지정한다.
 `FOUNDRY_ENDPOINT`, 두 deployment 이름과 token scope도 설정해야 한다.
-리소스 생성 명령은 모델 가중치를 AKS에 설치하지 않는다.
+생성·임베딩 모델 가중치는 AKS에 설치하지 않는다. 재정렬 모델만 CPU 전용 이미지에 포함한다.
 기존 Speech 연결 설정과 질병관리청 Secret만 필요한 비교 앱에 연결한다.
 모델 단독 앱에는 KDCA·검색·임베딩 설정을 연결하지 않는다.
+
+CPU 재정렬 이미지는 기본 앱 이미지와 다른 Docker target이다. 기본 target은 계속 앱이다.
+
+```bash
+az acr build --registry silvercare2a5aalbg7ugfc \
+  --image silvercare:CPU_RERANKER_TAG --file Dockerfile --target cpu-reranker --no-logs .
+uv run python -m silvercare.deploy_comparison deploy-reranker \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare:CPU_RERANKER_TAG
+uv run --extra reranker pytest -q
+```
+
+기본 정밀도는 FP32이며 graph·external weights의 SHA256을 빌드 때 검증한다.
+INT8 후보도 검증했지만 고정된 46개 후보군 평가에서 Hit@6은 같고
+MRR이 0.637681→0.626812로 하락해 사전 기준(최대 하락 0.01)을 통과하지 못했다.
+속도만 보고 기본 모델을 양자화하지 않는다. FP32 최적화는 같은 평가에서 Hit@6·MRR을 유지했다.
+이 검사는 각 질문의 동결된 RRF 상위 12개 후보 안에서의 비교이며 전체 임상 품질 인증이 아니다.
+TEI 롤백 manifest는 `.runtime/reranker-tei-rollback.json`에 별도로 보존한다.
+
+### Qwen + Azure Search만 추가·업데이트
+
+```bash
+uv run python -m silvercare.deploy_comparison deploy-qwen-azure \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare:COMPARISON_TAG
+```
+
+이 명령은 기존 Foundry gateway·관리 ID·Azure Search를 재사용한다.
+새 앱의 ConfigMap·Deployment·Service만 만들며 기존 세 앱·모델·검색 PVC 이미지는 바꾸지 않는다.
+전체 비교 환경을 배포하는 `deploy`는 세 비교 앱을 모두 포함한다.
+기존 baseline ConfigMap의 Azure 검색·임베딩·Speech 설정을 명시적으로 복사하고,
+생성 모델 배포명·키·임의 환경변수는 복사하지 않는다.
+질병관리청 키는 기존 Secret 참조로 연결한다.
+새 인덱스 생성·재임베딩·새 GPU/노드 프로비저닝은 수행하지 않는다.
+이 프로필의 readiness는 gateway 프로세스와 기존 Azure 인덱스 두 개의 문서 수를 확인한다.
 
 ### 문서 발행과 공개 순서
 
@@ -125,7 +161,7 @@ python -m silvercare.offline_ingest \
 기관 전화번호는 검증한 노령층 가이드의 발행기관 표시 유선번호만 보존한다.
 본문·분할·벡터·bulk 응답·refresh·최종 count 검증이 실패하면 성공 보고서를 쓰지 않는다.
 
-두 앱의 실제 추론, hybrid 검색·출처, 모델 단독의 빈 출처·건강정보,
+비교 앱의 실제 추론, hybrid 검색·출처, 모델 단독의 빈 출처·건강정보,
 Speech와 URL 접두사 분리를 확인한 뒤에만 다음 명령으로 경로를 공개한다.
 
 ```bash
@@ -135,7 +171,10 @@ uv run python -m silvercare.deploy_comparison routes
 Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge.json`에 백업한다.
 기존 root reverse proxy는 보존하며 비교 API/static만 각 서비스로 전달한다.
 클라이언트 IP와 비교용 660초 upstream timeout을 별도로 전달한다.
-경로가 이미 존재하면 재실행으로 덮어쓰지 않는다. 이후 앱 업데이트는 `deploy`만 사용한다.
+기존 `/local-rag/`, `/local-only/` 경로가 있으면 그 블록과 root proxy를 보존하면서
+`/qwen-azure-rag/`만 추가하고 `.runtime/qwen-azure-baseline-edge.json`에 추가 전 설정을 보관한다.
+요청한 경로가 모두 존재하면 재실행으로 덮어쓰지 않는다.
+이후 앱 업데이트에는 `deploy` 또는 해당 앱 전용 `deploy-qwen-azure`를 사용한다.
 앱과 gateway는 긴 비교 요청을 배포 중 잘라 버리지 않도록 종료 유예 660초를 둔다.
 인덱스 보고서와 비교 배포 상태는 별도 운영 파일로 보관하고 임시 indexer는 삭제한다.
 초기 단일 질문 smoke에서 모델 단독은 약 6.6초, CPU 재정렬을 포함한 RAG는

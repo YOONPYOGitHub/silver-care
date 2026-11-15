@@ -417,6 +417,18 @@ assert.equal(app.permissions.length, 0);
             '{basePath: "/local-rag", variant: "local-rag", requestTimeout: 600000}',
         )
 
+    def test_qwen_azure_profile_label_and_requests_do_not_use_the_model_only_mode(self):
+        self.run_javascript(
+            r"""
+await app.send("서비스 구분 확인입니다.");
+assert.equal(app.requests[0].path, "/qwen-azure-rag/api/chat");
+assert(app.element("variant-notice").textContent.includes("Azure 자료 검색"));
+assert(!app.element("variant-notice").textContent.includes("검색 없이"));
+assert(app.element("status").lastChild.textContent.includes("Azure 검색"));
+""",
+            '{basePath: "/qwen-azure-rag", variant: "qwen-azure-rag", requestTimeout: 600000}',
+        )
+
     def test_complete_voice_turn_uses_shared_memory_and_waits_for_playback_end(self):
         self.run_javascript(r"""
 await app.send("글로 먼저 물어봐요.");

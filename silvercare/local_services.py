@@ -1,4 +1,4 @@
-"""Small-model comparison profiles using a Foundry gateway and independent OSS search."""
+"""Shared Foundry generation with Azure Search, OSS RAG or model-only profiles."""
 
 import hashlib
 import json
@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from silvercare.azure import SYSTEM_PROMPT, AzureServices, UpstreamError
+from silvercare.azure import SEARCH_API, SYSTEM_PROMPT, AzureServices, UpstreamError
 from silvercare.config import Settings
 from silvercare.models import ChatRequest, ChatResponse
 from silvercare.privacy import redact
@@ -38,10 +38,10 @@ LLM_ONLY_PROMPT = (
 )
 
 
-class LocalServices(AzureServices):
+class QwenServices(AzureServices):
     def __init__(self, settings: Settings, **kwargs: Any) -> None:
         if settings.service_variant == "azure":
-            raise ValueError("LocalServices requires an explicit local variant")
+            raise ValueError("QwenServices requires an explicit comparison variant")
         if "client" not in kwargs:
             kwargs["client"] = httpx.AsyncClient(
                 timeout=httpx.Timeout(settings.local_request_timeout, connect=10)
@@ -51,18 +51,6 @@ class LocalServices(AzureServices):
     @property
     def generation_model(self) -> str:
         return self.settings.local_llm_model
-
-    @property
-    def search_endpoint(self) -> str:
-        return self.settings.local_search_endpoint
-
-    @property
-    def knowledge_index(self) -> str:
-        return self.settings.local_search_index
-
-    @property
-    def case_index(self) -> str:
-        return self.settings.local_search_case_index
 
     async def generate(
         self, instructions: str, inputs: str | list[dict[str, str]], max_tokens: int
@@ -120,6 +108,57 @@ class LocalServices(AzureServices):
             "status": "incomplete" if reason == "length" else "completed",
             "output": [{"content": [{"type": "output_text", "text": text.strip()}]}],
         }
+
+    async def ready(self) -> None:
+        await self.request("model", "GET", self.settings.local_llm_endpoint.rstrip("/") + "/health")
+        for index in (self.knowledge_index, self.case_index):
+            result = await self.request(
+                "search",
+                "GET",
+                f"{self.search_endpoint.rstrip('/')}/indexes/{index}/docs/$count"
+                f"?api-version={SEARCH_API}",
+                headers={"Authorization": f"Bearer {await self.token(search=True)}"},
+            )
+            try:
+                count = result.json()
+            except ValueError:
+                logger.warning("Azure comparison search returned an invalid document count")
+                raise UpstreamError("search", 502) from None
+            if type(count) is not int or count <= 0:
+                logger.warning("Azure comparison search corpus is not ready")
+                raise UpstreamError("search", 502)
+
+    async def chat(
+        self, payload: ChatRequest, *, trace: EvaluationTrace | None = None
+    ) -> ChatResponse:
+        result = await super().chat(payload, trace=trace)
+        if trace is not None:
+            trace.data["service_variant"] = self.settings.service_variant
+            trace.data["core_execution"] = (
+                "foundry-small-model-with-azure-search"
+                if self.settings.service_variant == "qwen-azure-rag"
+                else "foundry-models-with-oss-search"
+            )
+        return result
+
+
+class LocalServices(QwenServices):
+    def __init__(self, settings: Settings, **kwargs: Any) -> None:
+        if settings.service_variant not in {"local-rag", "local-only"}:
+            raise ValueError("LocalServices requires an explicit local variant")
+        super().__init__(settings, **kwargs)
+
+    @property
+    def search_endpoint(self) -> str:
+        return self.settings.local_search_endpoint
+
+    @property
+    def knowledge_index(self) -> str:
+        return self.settings.local_search_index
+
+    @property
+    def case_index(self) -> str:
+        return self.settings.local_search_case_index
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if self.settings.service_variant != "local-rag":
@@ -186,11 +225,7 @@ class LocalServices(AzureServices):
         self, payload: ChatRequest, *, trace: EvaluationTrace | None = None
     ) -> ChatResponse:
         if self.settings.service_variant == "local-rag":
-            result = await super().chat(payload, trace=trace)
-            if trace is not None:
-                trace.data["service_variant"] = "local-rag"
-                trace.data["core_execution"] = "foundry-models-with-oss-search"
-            return result
+            return await super().chat(payload, trace=trace)
         emergency = emergency_response(payload.message)
         if emergency:
             if trace is not None:

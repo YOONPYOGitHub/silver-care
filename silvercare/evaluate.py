@@ -206,20 +206,44 @@ class AudienceCase(BaseModel):
         return patterns
 
 
-async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
+def evaluation_services() -> AzureServices:
+    settings = get_settings()
+    if settings.service_variant == "azure":
+        return AzureServices(settings)
+    if settings.service_variant == "qwen-azure-rag":
+        from silvercare.local_services import QwenServices
+
+        return QwenServices(settings)
+    from silvercare.local_services import LocalServices
+
+    return LocalServices(settings)
+
+
+async def evaluate_audience(
+    path: Path, output: Path, *, services: AzureServices | None = None
+) -> dict[str, Any]:
     raw = await asyncio.to_thread(path.read_bytes)
     cases = [AudienceCase.model_validate(row) for row in json.loads(raw)["cases"]]
     if not cases or len({case.id for case in cases}) != len(cases):
         raise ValueError("Audience evaluation requires nonempty, uniquely named cases")
     knowledge = await asyncio.to_thread(Path("data/processed/expanded/knowledge.jsonl").read_bytes)
     case_data = await asyncio.to_thread(Path("data/processed/expanded/cases.jsonl").read_bytes)
-    services = AzureServices(get_settings())
+    services = services or evaluation_services()
+    retrieval_applicable = services.settings.service_variant != "local-only"
+    prompt = SYSTEM_PROMPT
+    if not retrieval_applicable:
+        from silvercare.local_services import LLM_ONLY_PROMPT
+
+        prompt = LLM_ONLY_PROMPT
     report: dict[str, Any] = {
-        "prompt_sha256": hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(),
+        "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
         "scenarios_sha256": hashlib.sha256(raw).hexdigest(),
-        "endpoint": services.settings.azure_search_endpoint,
-        "index": services.settings.azure_search_index,
-        "case_index": services.settings.azure_search_case_index,
+        "service_variant": services.settings.service_variant,
+        "generation_model": services.generation_model,
+        "endpoint": services.search_endpoint if retrieval_applicable else None,
+        "index": services.knowledge_index if retrieval_applicable else None,
+        "case_index": services.case_index if retrieval_applicable else None,
+        "retrieval_checks_applicable": retrieval_applicable,
         "official_health_enabled": bool(services.settings.kdca_health_api_key.get_secret_value()),
         "prefer_official_references": services.settings.prefer_official_references,
         "noncommercial_data_use": services.settings.noncommercial_data_use,
@@ -235,6 +259,7 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
     }
     try:
         for case in cases:
+            started = time.perf_counter()
             trace = (
                 EvaluationTrace.for_request(case.request)
                 if case.required_model_source_urls
@@ -267,6 +292,7 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
                         "answer_generated": False,
                         "outcome": "provider_safety_refusal" if accepted else "upstream_error",
                         "provider_error": violation,
+                        "seconds": round(time.perf_counter() - started, 3),
                     }
                 )
                 print(
@@ -295,18 +321,32 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
                 for row in (trace.data.get("reference_identities", []) if trace else [])
                 if row.get("source_url")
             ]
-            if not set(case.required_model_source_urls).issubset(model_source_urls):
+            if retrieval_applicable and not set(case.required_model_source_urls).issubset(
+                model_source_urls
+            ):
                 violations.append("missing_required_model_source")
             source_types = {source.source_type for source in result.sources}
-            if case.expected_mode is not None and result.mode != case.expected_mode:
+            if (
+                case.expected_mode is not None
+                and result.mode != case.expected_mode
+                and (retrieval_applicable or case.expected_mode != "grounded")
+            ):
                 violations.append("unexpected_response_mode")
-            for index, alternatives in enumerate(case.required_source_type_groups):
+            for index, alternatives in enumerate(
+                case.required_source_type_groups if retrieval_applicable else []
+            ):
                 if not source_types.intersection(alternatives):
                     violations.append(f"missing_source_type_group:{index}")
-            if case.required_source_url and case.required_source_url not in source_urls:
+            if (
+                retrieval_applicable
+                and case.required_source_url
+                and case.required_source_url not in source_urls
+            ):
                 violations.append("missing_required_citation")
-            if case.required_source_any and not set(case.required_source_any).intersection(
-                source_urls
+            if (
+                retrieval_applicable
+                and case.required_source_any
+                and not set(case.required_source_any).intersection(source_urls)
             ):
                 violations.append("missing_required_source")
             row = {
@@ -315,6 +355,7 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
                 "violations": violations,
                 "passed": not violations,
                 "answer_generated": True,
+                "seconds": round(time.perf_counter() - started, 3),
                 "outcome": "answer",
                 "source_urls": source_urls,
                 "model_source_urls": model_source_urls,
@@ -350,12 +391,67 @@ def relevant(row: dict[str, Any], target: dict[str, Any]) -> bool:
     )
 
 
-async def evaluate(path: Path, output: Path) -> dict[str, Any]:
+async def evaluate_retrieval_mode(
+    services: AzureServices, target: dict[str, Any], mode: str
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    query = target["query"]
+    try:
+        if mode == "hybrid" and services.settings.rewrite_queries:
+            query = await services.expand_query(query, [])
+        rows = await services.search(query, "reference", mode=mode)
+    except (UpstreamError, HealthUnavailable) as error:
+        detail = (
+            f"upstream:{error.service}:{error.status}"
+            if isinstance(error, UpstreamError)
+            else f"health:{error.reason}"
+        )
+        return {
+            "hit": False,
+            "rank": None,
+            "seconds": round(time.perf_counter() - started, 3),
+            "retrieval_query": query,
+            "results": [],
+            "error": detail,
+        }
+    rank = next((i for i, row in enumerate(rows, 1) if relevant(row, target)), None)
+    return {
+        "hit": rank is not None,
+        "rank": rank,
+        "seconds": round(time.perf_counter() - started, 3),
+        "retrieval_query": query,
+        "results": [
+            {
+                "title": row["title"],
+                "record_id": row.get("source_record_id"),
+                "source_url": row.get("source_url"),
+                "excerpt": row["content"][:180],
+            }
+            for row in rows
+        ],
+    }
+
+
+async def evaluate(
+    path: Path, output: Path, *, services: AzureServices | None = None
+) -> dict[str, Any]:
     raw = await asyncio.to_thread(path.read_text)
     queries = json.loads(raw)["queries"]
     if not queries:
         raise ValueError("Evaluation queries are empty")
-    services = AzureServices(get_settings())
+    services = services or evaluation_services()
+    if services.settings.service_variant == "local-only":
+        await services.close()
+        skipped_report = {
+            "service_variant": "local-only",
+            "status": "not_applicable",
+            "reason": "Model-only intentionally has no retrieval",
+            "queries": [],
+        }
+        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        await asyncio.to_thread(output.write_text, json.dumps(skipped_report, indent=2))
+        await asyncio.to_thread(output.chmod, 0o600)
+        return skipped_report
     report: dict[str, Any] = {
         "queries": [],
         "metrics": {},
@@ -367,8 +463,9 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
             "noncommercial_data_use": services.settings.noncommercial_data_use,
             "contextual_retrieval": services.settings.contextual_retrieval,
         },
-        "index": services.settings.azure_search_index,
-        "endpoint": services.settings.azure_search_endpoint,
+        "service_variant": services.settings.service_variant,
+        "index": services.knowledge_index,
+        "endpoint": services.search_endpoint,
         "embedding_dimensions": services.settings.embedding_dimensions,
     }
     corpus = Path("data/processed/expanded/knowledge.jsonl")
@@ -382,29 +479,7 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
                 "required": target.get("required", False),
             }
             for mode in ("keyword", "hybrid"):
-                started = time.perf_counter()
-                query = (
-                    await services.expand_query(target["query"], [])
-                    if mode == "hybrid" and services.settings.rewrite_queries
-                    else target["query"]
-                )
-                rows = await services.search(query, "reference", mode=mode)
-                rank = next((i for i, row in enumerate(rows, 1) if relevant(row, target)), None)
-                results[mode] = {
-                    "hit": rank is not None,
-                    "rank": rank,
-                    "seconds": round(time.perf_counter() - started, 3),
-                    "retrieval_query": query,
-                    "results": [
-                        {
-                            "title": row["title"],
-                            "record_id": row.get("source_record_id"),
-                            "source_url": row.get("source_url"),
-                            "excerpt": row["content"][:180],
-                        }
-                        for row in rows
-                    ],
-                }
+                results[mode] = await evaluate_retrieval_mode(services, target, mode)
             report["queries"].append(results)
             print(
                 json.dumps(
@@ -425,6 +500,7 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
             "hit_at_6": sum(row["hit"] for row in rows) / len(rows),
             "mrr_at_6": sum(1 / row["rank"] if row["rank"] else 0 for row in rows) / len(rows),
             "mean_seconds": sum(row["seconds"] for row in rows) / len(rows),
+            "error_count": sum("error" in row for row in rows),
         }
     report["required_targets_passed"] = all(
         row["hybrid"]["hit"] for row in report["queries"] if row["required"]
@@ -433,6 +509,7 @@ async def evaluate(path: Path, output: Path) -> dict[str, Any]:
         report["metrics"]["hybrid"]["hit_at_6"] >= report["metrics"]["keyword"]["hit_at_6"]
         and report["metrics"]["hybrid"]["mrr_at_6"] >= report["metrics"]["keyword"]["mrr_at_6"]
         and report["required_targets_passed"]
+        and not any(report["metrics"][mode]["error_count"] for mode in ("keyword", "hybrid"))
     )
     report["limitations"] = (
         "Small fixed, non-exhaustive target set. Retrieval targets are not medical-answer accuracy."

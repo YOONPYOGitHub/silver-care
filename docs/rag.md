@@ -42,17 +42,33 @@ API 자료도 수집·문서화·임베딩할 수 있다. 모든 API를 채팅 �
   보장하는 대체물이 아니며 검색 품질은 별도 평가 대상이다.
 - 재정렬: `BAAI/bge-reranker-v2-m3`의 FP32 ONNX export
   `woxpas-ai/bge-reranker-v2-m3-onnx`, revision
-  `c44ebc43de724ae8816668bb44d2e728e17faa18`. TEI CPU runtime digest를 고정하며
-  제3자 export라는 점을 원본 모델과 구분한다. 8192-token 문맥과 `auto_truncate=false`를 유지한다.
+  `c44ebc43de724ae8816668bb44d2e728e17faa18`. 제3자 export라는 점을 원본 모델과 구분하고
+  graph·external weights SHA256을 고정한다. ONNX Runtime CPU 실행에서 전체 8192-token 문맥을
+  유지하며 tokenizer와 runtime 모두 자동 절단하지 않는다.
   lexical/vector 합집합이 64개를 넘으면 후보를 버리지 않고 나눠 재정렬한다.
+  길이순 batch와 제한된 score cache로 같은 query/text의 중복 계산을 줄인다.
+  cache는 원문 질문·본문을 보관하지 않고 해시·점수만 메모리에 둔다.
+  INT8 후보는 속도 개선에도 불구하고 사전 MRR 비열등 기준을 못 맞춰 기본으로 적용하지 않았다.
 - 기존 분야·약물·자료 유형 필터, 부모/인접 청크, 사실/사례 구분, 출처·이용조건 검증,
   실행 시 질병관리청 근거 결합은 공통 파이프라인을 사용한다.
 
 `local-only`는 같은 생성 모델로 학습 지식만 사용한다. 검색·임베딩·검색어 확장·사례·
 질병관리청 근거·추가 건강정보를 사용하지 않으며 출처는 빈 목록이다.
 근거 부재를 이유로 일반 지식을 설명하지 못하도록 제한하지 않고, 임의 출처 번호는 오류로 처리한다.
-세 프로필 모두 공통 응급 고정 안내와 의료·개인정보 방침을 유지한다.
+네 프로필 모두 공통 응급 고정 안내와 의료·개인정보 방침을 유지한다.
 Azure Speech는 비교 프로필에서도 온라인 서비스다.
+
+`qwen-azure-rag`는 생성·검색어 확장만 같은 Qwen3.5-4B를 사용한다.
+문서·질문 벡터는 기존 `silvercare-embedding`의 text-embedding-3-small, 512차원이며
+기존 Azure AI Search `silvercare-knowledge-v9`, `silvercare-cases-v8`을 읽기 전용으로 재사용한다.
+하이브리드 검색·semantic 재정렬·공식 근거 우선·부모/인접 문맥·사례·질병관리청 API는
+Azure 기준과 같은 공통 파이프라인이다. Qwen 임베딩 1024차원을 기존 인덱스에 혼용하거나
+OpenSearch·CPU BGE에 우회하지 않으며, Azure GPT를 생성 fallback으로 사용하지 않는다.
+Qwen 응답에 인용을 요구하는 adapter도 OSS RAG와 공유한다.
+
+따라서 GPT + Azure Search와는 생성·검색어 확장 모델 차이를, Qwen + OSS RAG와는
+검색·임베딩·재정렬 구성 차이를 비교할 수 있다. 검색어 확장 결과도 달라질 수 있으므로
+최종 생성 모델만의 효과를 분리하려면 검색 문맥을 고정한 별도 평가가 필요하다.
 
 ## 2. 임베딩한 자료
 

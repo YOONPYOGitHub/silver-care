@@ -9,9 +9,9 @@ from silvercare.deploy import RUNTIME, az_json
 
 NAMESPACE = "silvercare-local"
 BASELINE_NAMESPACE = "silvercare"
-ML_RUNTIME = (
-    "silvercare2a5aalbg7ugfc.azurecr.io/local-embedding-runtime@sha256:"
-    "2538ea1c9640d3763b15af668039d24172d063b42337b0c27796fc2be180c78d"
+CPU_RUNTIME = (
+    "silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:"
+    "a8f38f27b0952a8bdc539ad4b7cc9acdc1fbbdf87f8acf1b883df5f7746dde49"
 )
 MANAGED_API_VERSION = "2026-03-15-preview"
 MANAGED_MODELS = {
@@ -166,6 +166,106 @@ def service(name: str, port: int) -> dict[str, Any]:
     )
 
 
+def app_resources(image: str, config: dict[str, str]) -> list[dict[str, Any]]:
+    variant = config["SERVICE_VARIANT"]
+    container: dict[str, Any] = {
+        "image": image,
+        "envFrom": [{"configMapRef": {"name": variant + "-config"}}],
+        "resources": {
+            "requests": {"cpu": "100m", "memory": "192Mi"},
+            "limits": {"cpu": "1", "memory": "512Mi"},
+        },
+        "readinessProbe": {
+            "httpGet": {"path": "/health/ready", "port": 8000},
+            "periodSeconds": 15,
+            "timeoutSeconds": 10,
+        },
+        "livenessProbe": {
+            "httpGet": {"path": "/health/live", "port": 8000},
+            "periodSeconds": 20,
+        },
+    }
+    if variant != "local-only":
+        container["env"] = [
+            {
+                "name": "KDCA_HEALTH_API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {"name": "silvercare-health", "key": "KDCA_HEALTH_API_KEY"}
+                },
+            }
+        ]
+    return [
+        obj("ConfigMap", variant + "-config", data=config),
+        service(variant, 8000),
+        deployment(variant, container, identity=True),
+    ]
+
+
+def qwen_azure_resources(image: str, baseline: dict[str, str]) -> list[dict[str, Any]]:
+    keys = {
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_EMBEDDING_DEPLOYMENT",
+        "AZURE_SEARCH_ENDPOINT",
+        "AZURE_SEARCH_INDEX",
+        "AZURE_SEARCH_CASE_INDEX",
+        "RETRIEVAL_MODE",
+        "EMBEDDING_DIMENSIONS",
+        "SEMANTIC_RANKING",
+        "REWRITE_QUERIES",
+        "PREFER_OFFICIAL_REFERENCES",
+        "CONTEXTUAL_RETRIEVAL",
+        "NONCOMMERCIAL_DATA_USE",
+        "PUBLIC_ORIGIN",
+    }
+    if not all(baseline.get(key, "").strip() for key in keys):
+        raise ValueError("The baseline must provide complete Azure retrieval settings")
+    config = {
+        key: value
+        for key, value in baseline.items()
+        if key in keys or key.startswith("AZURE_SPEECH_")
+    }
+    config.update(
+        {
+            "APP_ENV": "production",
+            "TRUSTED_PROXY": "true",
+            "SERVICE_VARIANT": "qwen-azure-rag",
+            "BASE_PATH": "/qwen-azure-rag",
+            "LOCAL_LLM_ENDPOINT": "http://foundry-gateway:8080",
+            "LOCAL_LLM_MODEL": "qwen3.5-4b",
+            "LOCAL_REQUEST_TIMEOUT": "600",
+            "RATE_LIMIT_PER_MINUTE": "24",
+            "MAX_CONCURRENT_REQUESTS": "2",
+        }
+    )
+    return app_resources(image, config)
+
+
+def cpu_reranker_resources(image: str) -> list[dict[str, Any]]:
+    return [
+        service("local-reranker", 8080),
+        deployment(
+            "local-reranker",
+            {
+                "image": image,
+                "resources": {
+                    "requests": {"cpu": "2", "memory": "3Gi"},
+                    "limits": {"cpu": "6", "memory": "24Gi"},
+                },
+                "startupProbe": {
+                    "httpGet": {"path": "/info", "port": 8080},
+                    "periodSeconds": 10,
+                    "failureThreshold": 90,
+                },
+                "readinessProbe": {
+                    "httpGet": {"path": "/info", "port": 8080},
+                    "timeoutSeconds": 5,
+                    "periodSeconds": 10,
+                },
+            },
+        ),
+    ]
+
+
 def resources(
     image: str,
     origin: str,
@@ -270,66 +370,7 @@ def resources(
             ),
         ]
     )
-    # This legacy catalog model has no matching Foundry managed-compute template.
-    # Only the reranker remains in AKS; its upstream revision and runtime digest are pinned.
-    result.extend(
-        [
-            service("local-reranker", 8080),
-            deployment(
-                "local-reranker",
-                {
-                    "image": ML_RUNTIME,
-                    "args": [
-                        "--model-id",
-                        "woxpas-ai/bge-reranker-v2-m3-onnx",
-                        "--revision",
-                        "c44ebc43de724ae8816668bb44d2e728e17faa18",
-                        "--hostname",
-                        "0.0.0.0",
-                        "--port",
-                        "8080",
-                        "--dtype",
-                        "float32",
-                        "--max-batch-tokens",
-                        "8192",
-                        "--auto-truncate",
-                        "false",
-                        "--max-client-batch-size",
-                        "64",
-                        "--max-concurrent-requests",
-                        "256",
-                        "--huggingface-hub-cache",
-                        "/models",
-                    ],
-                    "env": [
-                        {"name": "OMP_NUM_THREADS", "value": "4"},
-                        {"name": "RAYON_NUM_THREADS", "value": "4"},
-                    ],
-                    "resources": {
-                        "requests": {"cpu": "2", "memory": "16Gi"},
-                        "limits": {"cpu": "6", "memory": "24Gi"},
-                    },
-                    "volumeMounts": [{"name": "models", "mountPath": "/models"}],
-                    "startupProbe": {
-                        "httpGet": {"path": "/info", "port": 8080},
-                        "periodSeconds": 10,
-                        "failureThreshold": 120,
-                    },
-                    "readinessProbe": {
-                        "httpGet": {"path": "/info", "port": 8080},
-                        "timeoutSeconds": 5,
-                        "periodSeconds": 10,
-                    },
-                },
-                volumes=[
-                    {
-                        "name": "models",
-                        "persistentVolumeClaim": {"claimName": "local-reranker-cache"},
-                    }
-                ],
-            ),
-        ]
-    )
+    result.extend(cpu_reranker_resources(CPU_RUNTIME))
     for variant in ("local-rag", "local-only"):
         config = {
             "APP_ENV": "production",
@@ -361,34 +402,7 @@ def resources(
                     "NONCOMMERCIAL_DATA_USE": "true",
                 }
             )
-        result.append(obj("ConfigMap", variant + "-config", data=config))
-        container: dict[str, Any] = {
-            "image": image,
-            "envFrom": [{"configMapRef": {"name": variant + "-config"}}],
-            "resources": {
-                "requests": {"cpu": "100m", "memory": "192Mi"},
-                "limits": {"cpu": "1", "memory": "512Mi"},
-            },
-            "readinessProbe": {
-                "httpGet": {"path": "/health/ready", "port": 8000},
-                "periodSeconds": 15,
-                "timeoutSeconds": 10,
-            },
-            "livenessProbe": {
-                "httpGet": {"path": "/health/live", "port": 8000},
-                "periodSeconds": 20,
-            },
-        }
-        if variant == "local-rag":
-            container["env"] = [
-                {
-                    "name": "KDCA_HEALTH_API_KEY",
-                    "valueFrom": {
-                        "secretKeyRef": {"name": "silvercare-health", "key": "KDCA_HEALTH_API_KEY"}
-                    },
-                }
-            ]
-        result.extend([service(variant, 8000), deployment(variant, container, identity=True)])
+        result.extend(app_resources(image, config))
     return result
 
 
@@ -457,6 +471,17 @@ def configure_identity() -> tuple[str, str]:
     return identity["clientId"], account["tenantId"]
 
 
+def route_block(variant: str) -> str:
+    return (
+        f"  redir /{variant} /{variant}/ 308\n"
+        f"  handle_path /{variant}/* {{\n"
+        f"    reverse_proxy {variant}.{NAMESPACE}.svc.cluster.local:8000 {{\n"
+        "      header_up X-Real-IP {remote_host}\n"
+        "      transport http {\n        response_header_timeout 660s\n      }\n"
+        "    }\n  }\n"
+    )
+
+
 def route_config(original: str) -> str:
     if "/local-rag/" in original:
         raise ValueError("Comparison routes already exist; review changes explicitly")
@@ -464,24 +489,32 @@ def route_config(original: str) -> str:
     if original.count(marker) != 1 or not original.endswith("  }\n}\n"):
         raise ValueError("Unexpected baseline edge configuration; refusing automatic replacement")
     prefix, proxy = original.split(marker)
-    routes = ""
-    for variant in ("local-rag", "local-only"):
-        routes += (
-            f"  redir /{variant} /{variant}/ 308\n"
-            f"  handle_path /{variant}/* {{\n"
-            f"    reverse_proxy {variant}.{NAMESPACE}.svc.cluster.local:8000 {{\n"
-            "      header_up X-Real-IP {remote_host}\n"
-            "      transport http {\n        response_header_timeout 660s\n      }\n"
-            "    }\n  }\n"
-        )
+    routes = "".join(
+        route_block(variant) for variant in ("local-rag", "local-only", "qwen-azure-rag")
+    )
     return prefix + routes + "  handle {\n" + marker + proxy[:-2] + "  }\n}\n"
+
+
+def qwen_azure_route_config(original: str) -> str:
+    if "/qwen-azure-rag/" in original:
+        raise ValueError("Qwen Azure routes already exist; refusing to overwrite")
+    marker = "  handle {\n  reverse_proxy silvercare:8000 {"
+    if (
+        original.count(marker) != 1
+        or original.count(route_block("local-rag")) != 1
+        or original.count(route_block("local-only")) != 1
+    ):
+        raise ValueError("Unexpected existing comparison routes; refusing replacement")
+    return original.replace(marker, route_block("qwen-azure-rag") + marker, 1)
 
 
 def add_routes() -> None:
     baseline = json.loads(
         kubectl("-n", BASELINE_NAMESPACE, "get", "configmap", "silvercare-edge", "-o", "json")
     )
-    updated = route_config(baseline["data"]["Caddyfile"])
+    original = baseline["data"]["Caddyfile"]
+    extending = "/local-rag/" in original
+    updated = qwen_azure_route_config(original) if extending else route_config(original)
     kubectl(
         "-n",
         BASELINE_NAMESPACE,
@@ -497,7 +530,9 @@ def add_routes() -> None:
         "-",
         input_text=updated,
     )
-    backup = RUNTIME / "comparison-baseline-edge.json"
+    backup = RUNTIME / (
+        "qwen-azure-baseline-edge.json" if extending else "comparison-baseline-edge.json"
+    )
     if not backup.exists():
         backup.write_text(json.dumps({"data": baseline["data"]}, indent=2))
         backup.chmod(0o600)
@@ -533,14 +568,24 @@ def add_routes() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage isolated model-comparison services")
-    parser.add_argument("command", choices=["deploy", "routes", "models", "model-status"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "deploy",
+            "deploy-qwen-azure",
+            "deploy-reranker",
+            "routes",
+            "models",
+            "model-status",
+        ],
+    )
     parser.add_argument("--image")
     parser.add_argument("--foundry-endpoint")
     args = parser.parse_args()
     try:
-        if args.command == "deploy":
-            if not args.image or not args.foundry_endpoint:
-                raise ValueError("Image and Foundry endpoint are required")
+        if args.command in {"deploy", "deploy-qwen-azure"}:
+            if not args.image or (args.command == "deploy" and not args.foundry_endpoint):
+                raise ValueError("Image and, for full deployment, Foundry endpoint are required")
             apply([{"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": NAMESPACE}}])
             client_id, tenant = configure_identity()
             old = json.loads(
@@ -549,16 +594,22 @@ def main() -> None:
                 )
             )["data"]
             speech = {key: value for key, value in old.items() if key.startswith("AZURE_SPEECH_")}
-            apply(
-                resources(
-                    args.image,
-                    old["PUBLIC_ORIGIN"],
-                    client_id,
-                    tenant,
-                    speech,
-                    args.foundry_endpoint,
+            if args.command == "deploy":
+                apply(
+                    resources(
+                        args.image,
+                        old["PUBLIC_ORIGIN"],
+                        client_id,
+                        tenant,
+                        speech,
+                        args.foundry_endpoint,
+                    )
                 )
-            )
+            apply(qwen_azure_resources(args.image, old))
+        elif args.command == "deploy-reranker":
+            if not args.image:
+                raise ValueError("A validated CPU-reranker image is required")
+            apply(cpu_reranker_resources(args.image))
         elif args.command == "routes":
             add_routes()
         else:

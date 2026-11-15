@@ -102,6 +102,10 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
             app.state.azure = services
         elif config.service_variant == "azure":
             app.state.azure = AzureServices(config, health_service=app.state.health)
+        elif config.service_variant == "qwen-azure-rag":
+            from silvercare.local_services import QwenServices
+
+            app.state.azure = QwenServices(config, health_service=app.state.health)
         else:
             from silvercare.local_services import LocalServices
 
@@ -246,7 +250,7 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
             "name": "온담",
             "search_enabled": (
                 bool(config.azure_search_endpoint)
-                if config.service_variant == "azure"
+                if config.service_variant in {"azure", "qwen-azure-rag"}
                 else config.service_variant == "local-rag"
             ),
             "voice_enabled": bool(config.azure_speech_resource_id),
