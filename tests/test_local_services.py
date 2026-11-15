@@ -67,7 +67,9 @@ async def test_qwen_azure_rag_uses_existing_azure_embeddings_search_and_kdca():
             assert request.url.path == "/v1/chat/completions"
             assert body["model"] == "qwen3.5-4b"
             if body["max_tokens"] == 256:
-                return httpx.Response(200, json=completion("낙상 예방 falls"))
+                return httpx.Response(
+                    200, json=completion(json.dumps({"query": "낙상 예방 falls"}))
+                )
             assert "Azure 검색 근거" in body["messages"][0]["content"]
             assert "질병관리청 본문" in body["messages"][0]["content"]
             return httpx.Response(200, json=completion("집 안의 위험 요인을 점검하세요.[1][2]"))
@@ -217,6 +219,56 @@ async def test_model_only_has_exactly_one_local_call_no_hidden_evidence_or_query
         await service.close()
 
 
+async def test_qwen_query_rewrite_enforces_bounded_structured_output_without_changing_provider():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        body = json.loads(request.content)
+        schema = body["response_format"]["json_schema"]["schema"]
+        assert schema["properties"]["query"]["maxLength"] == 200
+        assert schema["additionalProperties"] is False
+        assert body["model"] == "qwen3.5-4b"
+        assert body["max_tokens"] == 256
+        assert "새 개인정보·약물명·확정 질환을 추론하지 마세요" in body["messages"][0]["content"]
+        return httpx.Response(200, json=completion('{"query":"건강 노화 식사 운동 healthy aging"}'))
+
+    service = QwenServices(
+        azure_settings(),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        question = "건강하게 지내려면 오늘 무엇부터 해보면 좋을까요?"
+        result = await service.expand_query(question, [])
+        assert result == question + "\n건강 노화 식사 운동 healthy aging"
+        assert len(calls) == 1 and calls[0].url.host == "model"
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize(
+    "value",
+    ['{"query":""}', '{"query":1}', '{"other":"q"}', '{"query":"' + "가" * 201 + '"}', "not json"],
+)
+async def test_malformed_qwen_query_object_fails_explicitly_without_gpt_fallback(value):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json=completion(value))
+
+    service = QwenServices(
+        azure_settings(),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    try:
+        with pytest.raises(UpstreamError):
+            await service.expand_query("오늘 건강 관리", [])
+        assert len(calls) == 1 and calls[0].url.host == "model"
+    finally:
+        await service.close()
+
+
 async def test_local_rag_keeps_kdca_grounding_and_citation_handling():
     calls = []
 
@@ -227,10 +279,10 @@ async def test_local_rag_keeps_kdca_grounding_and_citation_handling():
         assert request.url.host == "model"
         body = json.loads(request.content)
         if body["max_tokens"] == 256:
-            return httpx.Response(200, json=completion("낙상 예방 falls"))
+            return httpx.Response(200, json=completion(json.dumps({"query": "낙상 예방 falls"})))
         prompt = body["messages"][0]["content"]
         assert "기존 검색 근거" in prompt and "질병관리청 본문" in prompt
-        assert "해당 자료 id를 [1] 형식으로 인용" in body["messages"][-1]["content"]
+        assert "해당 자료 citation 번호를 [1] 형식으로 인용" in body["messages"][-1]["content"]
         return httpx.Response(200, json=completion("집 안의 위험 요인을 점검해 보세요.[1][2]"))
 
     service = LocalServices(

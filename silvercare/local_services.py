@@ -9,7 +9,13 @@ from typing import Any
 
 import httpx
 
-from silvercare.azure import SEARCH_API, SYSTEM_PROMPT, AzureServices, UpstreamError
+from silvercare.azure import (
+    QUERY_REWRITE_PROMPT,
+    SEARCH_API,
+    SYSTEM_PROMPT,
+    AzureServices,
+    UpstreamError,
+)
 from silvercare.config import Settings
 from silvercare.models import ChatRequest, ChatResponse
 from silvercare.privacy import redact
@@ -55,6 +61,7 @@ class QwenServices(AzureServices):
     async def generate(
         self, instructions: str, inputs: str | list[dict[str, str]], max_tokens: int
     ) -> dict[str, Any]:
+        rewrite = instructions == QUERY_REWRITE_PROMPT
         messages = [{"role": "system", "content": instructions}]
         messages.extend(
             [{"role": "user", "content": inputs}] if isinstance(inputs, str) else inputs
@@ -65,11 +72,31 @@ class QwenServices(AzureServices):
                 **messages[-1],
                 "content": messages[-1]["content"]
                 + "\n\n답변 작성: 검색 데이터의 reference에서 확인한 사실로 설명하고, "
-                "설명한 문장 끝에 해당 자료 id를 [1] 형식으로 인용하세요. "
-                "관련 official_api 내용도 설명하고 그 id를 반드시 인용하세요. "
+                "설명한 문장 끝에 해당 자료 citation 번호를 [1] 형식으로 인용하세요. "
+                "관련 official_api 내용도 설명하고 그 citation 번호를 반드시 인용하세요. "
                 "수치·단위·기간·적용 조건은 자료 그대로 보존하고 추측하지 마세요. "
                 "일반 지식만으로 답하거나 인용 없이 끝내지 마세요. "
-                "관련 근거가 없으면 그 한계를 밝히세요.",
+                "관련 근거가 없으면 그 한계를 밝히세요. "
+                "citation, source_record_id 같은 내부 필드명이나 "
+                "문서 ID 목록은 답변에 출력하지 마세요.",
+            }
+        format_options: dict[str, Any] = {}
+        if rewrite:
+            messages[0]["content"] += "\n검색어는 JSON 객체의 query 필드에만 출력하세요."
+            format_options["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "retrieval_query",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "minLength": 1, "maxLength": 200}
+                        },
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                },
             }
         response = await self.request(
             "model",
@@ -84,6 +111,7 @@ class QwenServices(AzureServices):
                 "seed": 42,
                 "stream": False,
                 "chat_template_kwargs": {"enable_thinking": False},
+                **format_options,
             },
         )
         try:
@@ -99,6 +127,17 @@ class QwenServices(AzureServices):
             model = data["model"]
             if not isinstance(model, str) or not model:
                 raise ValueError("Missing model identity")
+            if rewrite:
+                document = json.loads(text)
+                if (
+                    not isinstance(document, dict)
+                    or set(document) != {"query"}
+                    or not isinstance(document["query"], str)
+                    or not document["query"].strip()
+                    or len(document["query"]) > 200
+                ):
+                    raise ValueError("Invalid bounded query object")
+                text = document["query"]
         except (ValueError, KeyError, TypeError):
             logger.warning("Invalid local model completion")
             raise UpstreamError("model", 502) from None
