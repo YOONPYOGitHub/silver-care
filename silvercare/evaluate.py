@@ -20,6 +20,7 @@ from silvercare.config import get_settings
 from silvercare.health import HealthUnavailable
 from silvercare.models import ChatRequest
 from silvercare.privacy import redact
+from silvercare.tracing import EvaluationTrace
 
 
 class SpeechSample(BaseModel):
@@ -178,6 +179,7 @@ class AudienceCase(BaseModel):
     accept_provider_safety_refusal: bool = False
     required_source_url: str = ""
     required_source_any: list[str] = Field(default_factory=list)
+    required_model_source_urls: list[str] = Field(default_factory=list)
     required_source_type_groups: list[list[str]] = Field(default_factory=list)
     expected_mode: Literal["grounded", "conversation", "emergency"] | None = None
     required_patterns: list[str] = Field(default_factory=list)
@@ -233,8 +235,17 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
     }
     try:
         for case in cases:
+            trace = (
+                EvaluationTrace.for_request(case.request)
+                if case.required_model_source_urls
+                else None
+            )
             try:
-                result = await services.chat(case.request)
+                result = (
+                    await services.chat(case.request, trace=trace)
+                    if trace is not None
+                    else await services.chat(case.request)
+                )
             except (UpstreamError, HealthUnavailable) as exc:
                 violation = (
                     f"upstream:{exc.service}:{exc.status}"
@@ -279,6 +290,13 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
             if case.require_medical_caution and not result.medical_caution:
                 violations.append("missing_medical_caution")
             source_urls = [source.url for source in result.sources]
+            model_source_urls = [
+                row["source_url"]
+                for row in (trace.data.get("reference_identities", []) if trace else [])
+                if row.get("source_url")
+            ]
+            if not set(case.required_model_source_urls).issubset(model_source_urls):
+                violations.append("missing_required_model_source")
             source_types = {source.source_type for source in result.sources}
             if case.expected_mode is not None and result.mode != case.expected_mode:
                 violations.append("unexpected_response_mode")
@@ -299,6 +317,7 @@ async def evaluate_audience(path: Path, output: Path) -> dict[str, Any]:
                 "answer_generated": True,
                 "outcome": "answer",
                 "source_urls": source_urls,
+                "model_source_urls": model_source_urls,
                 "source_kinds": [source.evidence_kind for source in result.sources],
                 "health_topic_ids": [topic.id for topic in result.health_topics],
                 "mode": result.mode,

@@ -16,6 +16,7 @@ from silvercare.corpus import CorpusCatalog
 from silvercare.data import SearchDocument, care_audience, index_schema, prepare
 from silvercare.privacy import normalize, redact
 from silvercare.retrieval import (
+    NONCOMMERCIAL_DATASETS,
     drug_entities,
     parent_identity,
     source_profile,
@@ -23,7 +24,7 @@ from silvercare.retrieval import (
 )
 
 OUTPUT = Path("data/processed/expanded")
-KNOWLEDGE_INDEX = "silvercare-knowledge-v8"
+KNOWLEDGE_INDEX = "silvercare-knowledge-v9"
 CASE_INDEX = "silvercare-cases-v8"
 # AI Hub 86 data guide, page 10; source and document hash are recorded in the RAG guide.
 AGE_GROUPS = {
@@ -188,7 +189,9 @@ def annotate_documents(documents: list[SearchDocument]) -> None:
 
 
 def prepare_expanded(
-    external_path: Path | None, clinical_path: Path | None = None
+    external_path: Path | None,
+    clinical_path: Path | None = None,
+    targeted_path: Path | None = None,
 ) -> dict[str, Any]:
     catalog = CorpusCatalog.model_validate_json(Path("data/catalog.json").read_text())
     knowledge: list[SearchDocument] = []
@@ -204,6 +207,8 @@ def prepare_expanded(
         knowledge.extend(load_documents(external_path))
     if clinical_path is not None:
         knowledge.extend(load_documents(clinical_path))
+    if targeted_path is not None:
+        knowledge.extend(load_documents(targeted_path))
     for document in knowledge:
         if document.dataset_id == "mohw-care-2026" and document.audience == "general":
             document.audience = care_audience(document.title)
@@ -217,6 +222,16 @@ def prepare_expanded(
     cases, evaluation, counts = case_documents(catalog)
     for corpus in (selected, cases, evaluation):
         annotate_documents(corpus)
+    for corpus, filename in ((cases, "cases.jsonl"), (evaluation, "evaluation.jsonl")):
+        previous_path = OUTPUT / filename
+        if previous_path.exists():
+            previous = {document.id: document for document in load_documents(previous_path)}
+            for document in corpus:
+                old = previous.get(document.id)
+                if old and document.model_dump(exclude={"updated_at"}) == old.model_dump(
+                    exclude={"updated_at"}
+                ):
+                    document.updated_at = old.updated_at
     write_documents(OUTPUT / "knowledge.jsonl", selected)
     write_documents(OUTPUT / "cases.jsonl", cases)
     write_documents(OUTPUT / "evaluation.jsonl", evaluation)
@@ -281,11 +296,7 @@ class EmbeddingCache:
         self.connection.close()
 
 
-def validate_publish_target(
-    settings: Settings, index: str, documents: list[SearchDocument]
-) -> None:
-    if index not in {KNOWLEDGE_INDEX, CASE_INDEX}:
-        raise ValueError("Only explicitly configured staging indexes can be reconciled")
+def protected_indexes(settings: Settings) -> set[str]:
     protected = {settings.azure_search_index, settings.azure_search_case_index}
     release_path = OUTPUT / "release.json"
     if release_path.exists():
@@ -300,7 +311,21 @@ def validate_publish_target(
             settings.azure_search_endpoint.rstrip("/")
         ):
             protected.update(release_settings[field] for field in fields[1:])
-    if index in protected:
+    return protected
+
+
+def validate_publish_target(
+    settings: Settings,
+    index: str,
+    documents: list[SearchDocument],
+    *,
+    read_only: bool = False,
+) -> None:
+    if index not in {KNOWLEDGE_INDEX, CASE_INDEX}:
+        raise ValueError("Only explicitly configured staging indexes can be reconciled")
+    if read_only and index != CASE_INDEX:
+        raise ValueError("Only the unchanged cases index can be reused read-only")
+    if index in protected_indexes(settings) and not read_only:
         raise ValueError("Do not overwrite a configured or recorded live index")
     if not documents:
         raise ValueError("An expanded index must not be empty")
@@ -312,10 +337,10 @@ def validate_publish_target(
     if any(document.evidence_kind not in allowed for document in documents):
         raise ValueError("Prepared evidence kinds do not match the staging index")
     if (
-        any(document.dataset_id == "who-icope-2025" for document in documents)
+        any(document.dataset_id in NONCOMMERCIAL_DATASETS for document in documents)
         and not settings.noncommercial_data_use
     ):
-        raise ValueError("WHO publication requires confirmed noncommercial data use")
+        raise ValueError("Reference publication requires confirmed noncommercial data use")
     if settings.contextual_retrieval:
         if any(not document.parent_id for document in documents):
             raise ValueError("Contextual retrieval requires annotated parent metadata")
@@ -323,6 +348,55 @@ def validate_publish_target(
             documents
         ):
             raise ValueError("Duplicate chunk positions within a source parent")
+
+
+async def indexed_document_hashes(services: AzureServices, index: str) -> dict[str, str]:
+    base = services.settings.azure_search_endpoint.rstrip("/")
+    headers = {"Authorization": f"Bearer {await services.token(search=True)}"}
+    existing: dict[str, str] = {}
+    skip = 0
+    fields = list(SearchDocument.model_fields)
+    while True:
+        response = await services.request(
+            "search",
+            "POST",
+            f"{base}/indexes/{index}/docs/search?api-version={SEARCH_API}",
+            headers=headers,
+            json={"search": "*", "select": ",".join(fields), "top": 1000, "skip": skip},
+        )
+        rows = response.json()["value"]
+        for row in rows:
+            serialized = json.dumps({key: row.get(key) for key in fields}, sort_keys=True)
+            existing[row["id"]] = hashlib.sha256(serialized.encode()).hexdigest()
+        if len(rows) < 1000:
+            break
+        skip += 1000
+    return existing
+
+
+async def verify_reused_cases(
+    services: AzureServices, index: str, path: Path
+) -> dict[str, int | str]:
+    raw = await asyncio.to_thread(path.read_bytes)
+    documents = [
+        SearchDocument.model_validate_json(line) for line in raw.splitlines() if line.strip()
+    ]
+    validate_publish_target(services.settings, index, documents, read_only=True)
+    expected = {
+        doc.id: hashlib.sha256(json.dumps(doc.model_dump(), sort_keys=True).encode()).hexdigest()
+        for doc in documents
+    }
+    if await indexed_document_hashes(services, index) != expected:
+        raise ValueError("Live cases differ from the prepared corpus; refusing read-only reuse")
+    return {
+        "documents": len(documents),
+        "new_embeddings": 0,
+        "uploaded_changes": 0,
+        "unchanged": len(documents),
+        "deleted_stale": 0,
+        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "publication_mode": "verified_read_only_reuse",
+    }
 
 
 async def upload(
@@ -342,24 +416,7 @@ async def upload(
         headers=headers,
         json=index_schema(index, services.settings.embedding_dimensions),
     )
-    existing: dict[str, str] = {}
-    skip = 0
-    fields = list(SearchDocument.model_fields)
-    while True:
-        response = await services.request(
-            "search",
-            "POST",
-            f"{base}/indexes/{index}/docs/search?api-version={SEARCH_API}",
-            headers=headers,
-            json={"search": "*", "select": ",".join(fields), "top": 1000, "skip": skip},
-        )
-        rows = response.json()["value"]
-        for row in rows:
-            serialized = json.dumps({key: row.get(key) for key in fields}, sort_keys=True)
-            existing[row["id"]] = hashlib.sha256(serialized.encode()).hexdigest()
-        if len(rows) < 1000:
-            break
-        skip += 1000
+    existing = await indexed_document_hashes(services, index)
     changed = [
         doc
         for doc in documents
@@ -453,14 +510,28 @@ async def publish() -> None:
             raise ValueError("Publishing requires a search endpoint and embedding deployment")
         for index, name in targets:
             documents = await asyncio.to_thread(load_documents, OUTPUT / name)
-            await asyncio.to_thread(validate_publish_target, services.settings, index, documents)
+            validate_publish_target(
+                services.settings,
+                index,
+                documents,
+                read_only=index == CASE_INDEX and index in protected_indexes(services.settings),
+            )
+        reused = {}
+        if CASE_INDEX in protected_indexes(services.settings):
+            reused[CASE_INDEX] = await verify_reused_cases(
+                services, CASE_INDEX, OUTPUT / "cases.jsonl"
+            )
         cache = EmbeddingCache(
             OUTPUT / "embeddings.sqlite3",
             services.settings.azure_embedding_deployment,
             services.settings.embedding_dimensions,
         )
         for index, name in targets:
-            result = await upload(services, cache, index, OUTPUT / name)
+            result = (
+                reused[index]
+                if index in reused
+                else await upload(services, cache, index, OUTPUT / name)
+            )
             report["indexes"][index] = {
                 **result,
                 "file": name,
@@ -584,12 +655,13 @@ def main() -> None:
     parser.add_argument("command", choices=["prepare", "publish", "release"])
     parser.add_argument("--external", type=Path)
     parser.add_argument("--clinical", type=Path)
+    parser.add_argument("--targeted", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "prepare":
             print(
                 json.dumps(
-                    prepare_expanded(args.external, args.clinical),
+                    prepare_expanded(args.external, args.clinical, args.targeted),
                     ensure_ascii=False,
                     indent=2,
                 )

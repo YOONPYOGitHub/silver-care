@@ -2,8 +2,10 @@
 
 import hashlib
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urldefrag
 
 Domain = Literal["medical", "welfare", "conversation", "general"]
 SourceType = Literal[
@@ -32,6 +34,11 @@ class SourceProfile:
 
 
 PROFILES: dict[str, SourceProfile] = {
+    "cdc-diabetes": SourceProfile("medical", "patient_education", "en", "US"),
+    "medlineplus-injury": SourceProfile("medical", "patient_education", "en", "US"),
+    "nccih-supplements": SourceProfile("medical", "patient_education", "en", "US"),
+    "nei-areds2": SourceProfile("medical", "patient_education", "en", "US"),
+    "korean-bls-2025": SourceProfile("medical", "clinical_guideline", "en", "KR"),
     "medlineplus": SourceProfile("medical", "patient_education", "en", "US"),
     "who-icope-2025": SourceProfile("medical", "clinical_guideline", "en", "international"),
     "va-pressure-2026": SourceProfile("medical", "clinical_guideline", "en", "US"),
@@ -46,6 +53,18 @@ PROFILES: dict[str, SourceProfile] = {
     "nhis-detail": SourceProfile("welfare", "institution_directory", "ko", "KR"),
     "mohw-129-guidance": SourceProfile("welfare", "contact_reference", "ko", "KR"),
     "ondam-reference-v1": SourceProfile("general", "contact_reference", "ko", "KR"),
+}
+NONCOMMERCIAL_DATASETS = frozenset({"who-icope-2025", "korean-bls-2025"})
+SOURCE_LICENSE_URLS = {
+    "who-icope-2025": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+    "korean-bls-2025": "https://creativecommons.org/licenses/by-nc/4.0/",
+}
+SOURCE_REUSE_NOTICES = {
+    "cdc-diabetes": (
+        "출처: 미국 CDC. 원문은 CDC 웹사이트에서 무료로 제공됩니다. "
+        "CDC·HHS·미국 정부는 이 서비스를 보증하거나 추천하지 않습니다. "
+        "선택한 원문 텍스트이며 의학적 수치·조건·권고를 변경한 CDC 자료가 아닙니다."
+    )
 }
 DRUG_ALIASES = {
     "apixaban": ("apixaban", "아픽사반", "eliquis", "엘리퀴스"),
@@ -163,6 +182,8 @@ class RetrievalPlan:
     needs_drug_identity: bool = False
     search_references: bool = True
     qa_examples: bool = False
+    patient_facing: bool = False
+    integrated_care: bool = False
 
 
 def conversation_only(query: str) -> bool:
@@ -189,6 +210,23 @@ def retrieval_plan(query: str, current: str | None = None) -> RetrievalPlan:
     )
     medication = bool(drugs or DRUG_QUESTION.search(query))
     mechanism = bool(re.search(r"CYP|P-gp|효소|기전|기질|억제|유도|수송체|표의? 빈칸", query, re.I))
+    professional = bool(
+        re.search(
+            r"진료지침|가이드라인|의료인용|전문가용|임상|프로토콜|적응증|기전|CYP|시험|문항|퀴즈"
+            r"|guideline|clinician|professional|protocol|mechanism|exam",
+            current,
+            re.I,
+        )
+    )
+    integrated = bool(
+        re.search(
+            r"복합.{0,6}질환|통합.{0,5}(?:돌봄|관리)|개인별.{0,5}돌봄.{0,5}계획"
+            r"|공동\s*의사결정|목표.{0,8}(?:함께|같이|조정)"
+            r"|multimorbidity|shared.decision|care plan",
+            query,
+            re.I,
+        )
+    )
     uncertain = (
         medication
         and not drugs
@@ -202,6 +240,8 @@ def retrieval_plan(query: str, current: str | None = None) -> RetrievalPlan:
         mechanism=mechanism,
         needs_drug_identity=uncertain,
         qa_examples=bool(re.search(r"객관식|선택지|시험|문항|퀴즈|정답|quiz|exam", current, re.I)),
+        patient_facing=medical and not professional and not mechanism,
+        integrated_care=medical and integrated,
     )
 
 
@@ -244,7 +284,20 @@ def preferred_filter(plan: RetrievalPlan) -> str:
         kinds = {"patient_education", "clinical_guideline", "contact_reference"}
     if "welfare" in plan.domains:
         kinds.update({"welfare_guidance", "institution_directory", "contact_reference"})
+    if plan.patient_facing and not plan.integrated_care:
+        kinds.discard("clinical_guideline")
     return "(" + " or ".join(f"source_type eq {odata_string(kind)}" for kind in sorted(kinds)) + ")"
+
+
+def source_family(row: dict[str, Any]) -> tuple[str, str] | None:
+    if row.get("source_type") not in {"patient_education", "clinical_guideline"}:
+        return None
+    dataset, url = row.get("dataset_id"), row.get("source_url")
+    return (
+        (dataset, urldefrag(url).url)
+        if isinstance(dataset, str) and isinstance(url, str) and url
+        else None
+    )
 
 
 def choose_parents(
@@ -253,7 +306,19 @@ def choose_parents(
     limit: int = 6,
     *,
     domains: tuple[Domain, ...] = (),
+    integrated_care: bool = False,
 ) -> list[dict[str, Any]]:
+    if integrated_care:
+        preferred = sorted(
+            preferred,
+            key=lambda row: (
+                not (
+                    row.get("source_type") == "clinical_guideline"
+                    and row.get("topic") == "통합 돌봄·복합질환"
+                    and re.search(r"계획|care plan", row.get("title", ""), re.I)
+                )
+            ),
+        )
     for row in [*preferred, *broad]:
         if not isinstance(row.get("parent_id"), str) or not row["parent_id"]:
             raise ValueError("Missing contextual parent identity")
@@ -277,12 +342,19 @@ def choose_parents(
             seed.append(row)
             seen.add(row["parent_id"])
     result = list(seed)
-    for row in [*broad, *preferred]:
-        if row["parent_id"] not in seen:
+    families = Counter(source_family(row) for row in seed)
+    for relaxed in (False, True):
+        for row in [*broad, *preferred]:
+            if row["parent_id"] in seen:
+                continue
+            family = source_family(row)
+            if not relaxed and family is not None and families[family] >= 2:
+                continue
             result.append(row)
             seen.add(row["parent_id"])
+            families[family] += 1
             if len(result) == limit:
-                break
+                return result
     return result
 
 
@@ -311,7 +383,11 @@ def stitch_chunks(rows: list[dict[str, Any]]) -> str:
 
 
 def merge_parent(
-    anchor: dict[str, Any], siblings: list[dict[str, Any]], max_characters: int = 3600
+    anchor: dict[str, Any],
+    siblings: list[dict[str, Any]],
+    max_characters: int = 3600,
+    *,
+    query: str = "",
 ) -> dict[str, Any]:
     matching = {
         row["chunk_index"]: row for row in siblings if row["parent_id"] == anchor["parent_id"]
@@ -337,7 +413,17 @@ def merge_parent(
     selected = [matching[index]]
     if len(anchor["content"]) > max_characters:
         raise ValueError("Anchor chunk exceeds the evidence budget")
-    for neighbor in (index - 1, index + 1):
+    terms = set(re.findall(r"[가-힣a-z0-9]{3,}", query.casefold()))
+    neighbors = [neighbor for neighbor in (index - 1, index + 1) if neighbor in matching]
+    neighbors.sort(
+        key=lambda neighbor: (
+            -len(
+                terms
+                & set(re.findall(r"[가-힣a-z0-9]{3,}", matching[neighbor]["content"].casefold()))
+            )
+        )
+    )
+    for neighbor in neighbors:
         if neighbor in matching:
             candidate = sorted([*selected, matching[neighbor]], key=lambda row: row["chunk_index"])
             if len(stitch_chunks(candidate)) <= max_characters:

@@ -20,6 +20,90 @@ from silvercare.retrieval import (
 from tests.test_azure import make_services
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "고혈압 당뇨 보행 제한이 있는 복합 만성질환의 통합 돌봄 계획",
+        "건강 관리 목표를 함께 정하고 공동 의사결정을 하고 싶어요.",
+        "medical multimorbidity shared decision-making care plan",
+    ],
+)
+def test_integrated_care_keeps_applicable_guidelines_in_preferred_pool(query):
+    plan = retrieval_plan(query)
+    assert plan.patient_facing
+    assert plan.integrated_care
+    assert "source_type eq 'clinical_guideline'" in preferred_filter(plan)
+
+
+def test_routine_patient_education_still_excludes_preferred_professional_guidelines():
+    plan = retrieval_plan("평소 건강한 식사와 생활 습관을 알려주세요.")
+    assert plan.patient_facing
+    assert not plan.integrated_care
+    assert "clinical_guideline" not in preferred_filter(plan)
+
+
+async def test_mixed_medical_welfare_search_keeps_a_generic_welfare_contact():
+    medical = row("medical", "medical-parent", domain="medical")
+    specific = row("specific", "specific-parent", domain="welfare")
+    contact = row("contact", "contact-parent", domain="welfare", source_type="contact_reference")
+    calls = []
+
+    def handle(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if "source_type eq 'contact_reference'" in body["filter"] and body["top"] == 1:
+            return httpx.Response(200, json={"value": [contact]})
+        if "parent_id eq" in body["filter"]:
+            return httpx.Response(200, json={"value": [medical, specific, contact]})
+        return httpx.Response(200, json={"value": [medical, specific]})
+
+    service = make_services(handle)
+    service.settings.contextual_retrieval = True
+    service.settings.prefer_official_references = True
+    try:
+        rows = await service.search("당뇨 건강관리와 생활 돌봄 서비스 신청 문의", "reference")
+        assert {candidate["id"] for candidate in rows} >= {"medical", "contact"}
+        assert any(body["top"] == 1 for body in calls)
+    finally:
+        await service.close()
+
+
+def test_context_budget_keeps_the_anchor_and_the_more_relevant_neighbor():
+    before = row("before", "parent", 0, "Heart failure causes. " * 8)
+    anchor = row("anchor", "parent", 1, "Heart failure symptoms and edema. " * 6)
+    after = row("after", "parent", 2, "Treatment limits fluid and sodium. " * 6)
+    result = merge_parent(
+        anchor, [before, anchor, after], 430, query="heart failure treatment fluid sodium"
+    )
+    assert result["context_chunk_ids"] == ["anchor", "after"]
+    assert anchor["content"].strip() in result["content"]
+    assert "limits fluid and sodium" in result["content"]
+
+
+def test_integrated_care_prioritizes_the_plan_over_individual_function_interventions():
+    mobility = row("mobility", "mobility", source_type="clinical_guideline", topic="운동·신체활동")
+    overview = row(
+        "overview",
+        "overview",
+        source_type="clinical_guideline",
+        topic="통합 돌봄·복합질환",
+        title="개인별 돌봄 계획 · 개요",
+    )
+    plan = row(
+        "plan",
+        "plan",
+        source_type="clinical_guideline",
+        topic="통합 돌봄·복합질환",
+        title="개인별 돌봄 계획 · 목표 조정",
+    )
+    broad = [row(str(i), str(i), source_type="medical_dataset") for i in range(6)]
+    preferred = [mobility, overview, plan]
+    assert [r["id"] for r in choose_parents(broad, preferred, integrated_care=True)][:2] == [
+        "overview",
+        "plan",
+    ]
+
+
 def row(identity, parent, index=0, content="Synthetic reference text.", **extra):
     return {
         "id": identity,
@@ -122,6 +206,37 @@ def test_parent_selection_deduplicates_chunks_not_distinct_drugs_at_the_same_url
     assert {r["domain"] for r in mixed[:2]} == {"medical", "welfare"}
 
 
+def test_patient_question_prefers_patient_sources_without_excluding_guidelines():
+    patient = retrieval_plan("어머니가 넘어지지 않게 집과 생활을 어떻게 바꿀까요?")
+    assert "patient_education" in preferred_filter(patient)
+    assert "clinical_guideline" not in preferred_filter(patient)
+    assert "clinical_guideline" not in domain_filter(patient)
+    professional = retrieval_plan("노쇠 진료지침의 전문적인 평가 기준을 설명해 주세요")
+    assert "clinical_guideline" in preferred_filter(professional)
+
+
+def test_parent_selection_gives_distinct_source_families_a_first_pass():
+    book = [
+        row(
+            f"book-{i}",
+            f"page-{i}",
+            source_type="clinical_guideline",
+            dataset_id="manual",
+            source_url=f"https://example.test/manual#page={i}",
+        )
+        for i in range(5)
+    ]
+    patients = [
+        row(f"p-{i}", f"patient-{i}", source_url=f"https://example.test/topic-{i}")
+        for i in range(3)
+    ]
+    selected = choose_parents(book + patients, book[:2])
+    assert len(selected) == 6
+    assert len([r for r in selected if r["dataset_id"] == "manual"]) == 3
+    assert all(any(r["id"] == p["id"] for r in selected) for p in patients)
+    assert len(choose_parents(book, book[:2])) == 5
+
+
 def test_adjacent_chunks_are_ordered_and_exact_overlap_is_removed():
     shared = "This exact source overlap is deliberately longer than forty characters."
     previous = row("a0", "p", 0, "Original condition.\n" + shared)
@@ -133,6 +248,7 @@ def test_adjacent_chunks_are_ordered_and_exact_overlap_is_removed():
     assert result["content"].endswith("Additional source exception.")
     assert result["context_record_ids"] == ["p:chunk-0", "p:chunk-1", "p:chunk-2"]
     assert result["source_record_id"] == "p"
+    assert result["context_chunk_ids"] == ["a0", "a1", "a2"]
 
 
 def test_repeated_clinical_header_is_kept_once_without_removing_source_conditions():

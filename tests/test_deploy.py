@@ -110,6 +110,51 @@ def test_stdin_command_failure_does_not_echo_secret_manifests(monkeypatch):
     assert "withheld" in str(error.value)
 
 
+def test_evaluation_trace_credential_has_its_own_secret_and_defaults_off():
+    token = SecretStr("synthetic-evaluation-only-token-0123456789")
+    resources = kubernetes_resources(
+        "registry/app:v1",
+        "client",
+        "tenant",
+        "care.example",
+        "https://search.example",
+        "/speech",
+        evaluation_trace_enabled=True,
+        evaluation_trace_token=token,
+    )
+    secret = next(r for r in resources if r["metadata"]["name"] == "silvercare-evaluation")
+    assert secret["stringData"] == {"EVALUATION_TRACE_TOKEN": token.get_secret_value()}
+    config = next(r for r in resources if r["kind"] == "ConfigMap")
+    assert config["data"]["EVALUATION_TRACE_ENABLED"] == "true"
+    assert token.get_secret_value() not in str(config)
+    deployment = next(
+        r for r in resources if r["kind"] == "Deployment" and r["metadata"]["name"] == "silvercare"
+    )
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert token.get_secret_value() not in str(container)
+    assert container["env"] == [
+        {
+            "name": "EVALUATION_TRACE_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": "silvercare-evaluation",
+                    "key": "EVALUATION_TRACE_TOKEN",
+                }
+            },
+        }
+    ]
+    with pytest.raises(ValueError, match="separate token"):
+        kubernetes_resources(
+            "image",
+            "client",
+            "tenant",
+            "care.example",
+            "https://search.example",
+            "/speech",
+            evaluation_trace_enabled=True,
+        )
+
+
 @pytest.mark.parametrize("failure", ["rollout", "https", None])
 def test_deployment_state_is_written_only_after_verified_readiness(tmp_path, monkeypatch, failure):
     runtime = tmp_path / ".runtime"

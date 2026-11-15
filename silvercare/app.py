@@ -1,6 +1,7 @@
 import asyncio
 import ipaddress
 import logging
+import secrets
 import time
 from collections import OrderedDict, deque
 from collections.abc import AsyncIterator
@@ -21,10 +22,19 @@ from silvercare.azure import AzureServices, UpstreamError
 from silvercare.config import Settings, get_settings
 from silvercare.health import BY_ID, TOPICS, HealthService, HealthUnavailable, select_topics
 from silvercare.models import ChatRequest, ChatResponse, HealthArticle, HealthTopic, SpeechRequest
+from silvercare.tracing import EvaluationTrace
 
 logger = logging.getLogger(__name__)
 STATIC = Path(__file__).parent / "static"
 AUDIO_LIMIT = 4 * 1024 * 1024
+
+
+def error_response(request: Request, body: dict[str, Any], status: int) -> JSONResponse:
+    trace = getattr(request.state, "evaluation_trace", None)
+    if isinstance(trace, EvaluationTrace):
+        trace.data["failure"] = {"http_status": status, "code": body.get("code")}
+        body = {**body, "evaluation_trace": trace.export()}
+    return JSONResponse(body, status)
 
 
 class BodyLimit:
@@ -152,7 +162,8 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
     @app.exception_handler(UpstreamError)
     async def upstream_error(request: Request, exc: UpstreamError) -> JSONResponse:
         if exc.service == "model" and exc.code == "content_filter":
-            return JSONResponse(
+            return error_response(
+                request,
                 {
                     "code": "safety_refusal",
                     "detail": (
@@ -170,20 +181,21 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
         }
         message = f"{names.get(exc.service, '연결')} 서비스 연결에 문제가 있습니다."
         if exc.service == "speech" and exc.status == 422:
-            return JSONResponse(
-                {"detail": "말씀을 잘 듣지 못했어요. 다시 한 번 말씀해 주세요."}, 422
+            return error_response(
+                request, {"detail": "말씀을 잘 듣지 못했어요. 다시 한 번 말씀해 주세요."}, 422
             )
-        return JSONResponse({"detail": message + " 잠시 후 다시 시도해 주세요."}, 503)
+        return error_response(request, {"detail": message + " 잠시 후 다시 시도해 주세요."}, 503)
 
     @app.exception_handler(ClientAuthenticationError)
     async def auth_error(request: Request, exc: ClientAuthenticationError) -> JSONResponse:
         logger.error("Azure authentication unavailable: %s", type(exc).__name__)
-        return JSONResponse({"detail": "서비스 연결 인증을 확인해 주세요."}, 503)
+        return error_response(request, {"detail": "서비스 연결 인증을 확인해 주세요."}, 503)
 
     @app.exception_handler(HealthUnavailable)
     async def health_error(request: Request, exc: HealthUnavailable) -> JSONResponse:
         logger.warning("Official health information unavailable: %s", exc.reason)
-        return JSONResponse(
+        return error_response(
+            request,
             {
                 "detail": (
                     "공식 건강정보를 불러오지 못했어요. "
@@ -196,7 +208,7 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
     @app.exception_handler(httpx.RequestError)
     async def transport_error(request: Request, exc: httpx.RequestError) -> JSONResponse:
         logger.warning("External transport unavailable: %s", type(exc).__name__)
-        return JSONResponse({"detail": "외부 서비스에 연결하지 못했습니다."}, 503)
+        return error_response(request, {"detail": "외부 서비스에 연결하지 못했습니다."}, 503)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -225,10 +237,31 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
         }
 
     @app.post("/api/chat", response_model=ChatResponse, dependencies=guarded)
-    async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
-        result: ChatResponse = await request.app.state.azure.chat(payload)
+    async def chat(payload: ChatRequest, request: Request) -> ChatResponse | JSONResponse:
+        trace = None
+        if request.headers.get("x-ondam-evaluation") == "trace":
+            expected = config.evaluation_trace_token.get_secret_value()
+            authorization = request.headers.get("authorization", "")
+            if (
+                not config.evaluation_trace_enabled
+                or not expected
+                or not secrets.compare_digest(authorization.encode(), f"Bearer {expected}".encode())
+            ):
+                raise HTTPException(403, "평가 추적 권한을 확인해 주세요.")
+            trace = EvaluationTrace.for_request(payload)
+            request.state.evaluation_trace = trace
+        result: ChatResponse
+        if trace is None:
+            result = await request.app.state.azure.chat(payload)
+        else:
+            result = await request.app.state.azure.chat(payload, trace=trace)
         if result.mode != "emergency" and config.kdca_health_api_key.get_secret_value():
             result.health_topics = select_topics(payload.message, payload.history)
+        if trace is not None:
+            trace.data["response_mode"] = result.mode
+            return JSONResponse(
+                {**result.model_dump(mode="json"), "evaluation_trace": trace.export()}
+            )
         return result
 
     @app.get("/api/health-topics", response_model=list[HealthTopic])

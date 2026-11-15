@@ -26,6 +26,19 @@ from silvercare.health import (
 from silvercare.models import ChatRequest, ChatResponse, HealthArticle, HealthSection, Message
 from tests.test_azure import TestServices
 
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "혈압약이랑 감기약을 같이 먹어도 괜찮아요?",
+        "혈압과 혈당을 관리 중인데 약을 함께 복용할 때 주의할 점은요?",
+        "당뇨약과 영양제를 같이 먹어도 될까요?",
+    ],
+)
+def test_medication_safety_precedes_disease_topics_for_medication_questions(question):
+    assert select_topics(question, [])[0].id == "5428"
+
+
 XML = """<?xml version="1.0" encoding="UTF-8"?>
 <XML><HEAD><CODE>S001</CODE><MESSAGE>OK</MESSAGE></HEAD><svc>
 <CNTNTSSJ>낙상</CNTNTSSJ><CNTNTS_SN>1743</CNTNTS_SN><cntntsClList>

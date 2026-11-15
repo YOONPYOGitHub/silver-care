@@ -39,6 +39,8 @@ coverage.xml
 
 # Deployment state, provider downloads and generated corpora
 .runtime/
+/evaluation/runs/
+/tmp/
 data/raw/
 data/processed/
 .terraform/

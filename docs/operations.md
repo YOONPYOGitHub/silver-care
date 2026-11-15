@@ -107,17 +107,20 @@ uv run python -m silvercare.external_sources \
 
 # 운영자가 WHO 자료의 비상업적 이용을 확인한 경우에만 실행한다.
 uv run python -m silvercare.clinical_sources --noncommercial-use
+uv run python -m silvercare.targeted_sources --noncommercial-use
 
 # 직접 작성한 기관 안내와 등록 corpus를 준비한다.
 uv run python -m silvercare.data prepare \
   --manifest data/reference.json --output data/processed/reference.jsonl
 uv run python -m silvercare.expanded prepare \
   --external data/processed/external-knowledge.jsonl \
-  --clinical data/processed/clinical-knowledge.jsonl
+  --clinical data/processed/clinical-knowledge.jsonl \
+  --targeted data/processed/targeted-medical-knowledge.jsonl
 ```
 
 `expanded prepare`에서 `--external`을 빼면 외부 지식이 준비 결과에 들어가지 않는다.
 `--clinical`을 빼면 전문 근거 591개 청크도 들어가지 않으므로 운영 corpus 준비에는 둘 다 지정한다.
+v9에서는 `--targeted`도 지정해야 성인 기도폐쇄·영양제·저혈당·머리 부상 근거 31개 청크가 포함된다.
 집계 준비는 최종 지식·사례·평가 파일에 분야·자료 유형·원문 언어·국가·부모 키·청크 순번·
 제한된 약명 연결을 채운다. 원천별 수집 산출물을 최종 검색 메타데이터 집계본으로 오해하지 않는다.
 원본·manifest·수집 응답을 먼저 점검하고 통계·출처·개인정보·평가 분리를 검토한다.
@@ -155,13 +158,16 @@ CLI는 HTTP 오류를 실패로 보고하므로 필요하면 공식 웹 파일 �
 
 **활성 인덱스를 대상으로 아래 작업을 바로 실행하지 않는다.**
 `expanded.py`의 `KNOWLEDGE_INDEX`·`CASE_INDEX`는 발행 대상 이름이다.
-코드 상수와 활성 릴리스는 모두 `v8`이므로 새 corpus를 발행하려면 먼저
-두 발행 대상을 사용하지 않는 버전 이름으로 지정해야 한다.
+지식 발행 대상은 `silvercare-knowledge-v9`, 사례는 변경 없는 `silvercare-cases-v8`이다.
+새 지식 corpus는 사용하지 않는 버전 이름에 발행한다.
+활성 사례는 모든 문서 필드가 준비본과 일치할 때만 읽기 전용으로 재사용하며,
+불일치하면 지식 색인을 변경하기 전에 발행을 중단한다.
 목표 이름을 바꾸는 CLI 옵션이나 자동 blue/green 이름 생성은 구현되어 있지 않다.
 
-예를 들어 다음 발행 대상이 `silvercare-knowledge-v9`, `silvercare-cases-v9`라면:
+아래는 v8에서 지식 v9·사례 v8로 전환하는 절차다.
+이미 활성화된 지식 v9를 다시 덮어쓰는 절차가 아니며, 다음 발행에는 새 이름과 용량 검토가 필요하다.
 
-1. 코드의 두 발행 상수를 해당 미사용 이름으로 설정한다.
+1. 지식 발행 상수를 미사용 이름으로 지정한다. 사례를 변경했다면 별도 미사용 사례 이름도 필요하다.
 2. `AZURE_SEARCH_INDEX`·`AZURE_SEARCH_CASE_INDEX`는 발행 시점의 활성 인덱스를 가리키게 한다. 발행기는 이 설정과 같은 endpoint의 `release.json`에 기록된 지식·사례 인덱스를 모두 보호한다.
 3. Azure endpoint·임베딩 배포·차원·검색 기능을 명시하고 발행한다.
 4. 평가 때는 환경변수의 인덱스를 발행한 새 대상으로 전환한다.
@@ -184,7 +190,7 @@ uv run python -m silvercare.expanded publish
 
 # 평가·릴리스는 검토한 새 버전 대상으로 실행한다.
 export AZURE_SEARCH_INDEX=silvercare-knowledge-v9
-export AZURE_SEARCH_CASE_INDEX=silvercare-cases-v9
+export AZURE_SEARCH_CASE_INDEX=silvercare-cases-v8
 uv run python -m silvercare.evaluate \
   --queries data/retrieval-evaluation.json \
   --output data/processed/expanded/retrieval-evaluation-final.json
@@ -195,16 +201,23 @@ uv run python -m silvercare.expanded release
 ```
 
 `publish`는 두 corpus의 타입·중복 ID·발행 대상을 원격 변경 전에 검증한다.
-현재 설정과 기록된 릴리스의 활성 인덱스는 발행 대상으로 사용할 수 없다.
+현재 설정과 기록된 릴리스의 활성 지식 인덱스는 발행 대상으로 사용할 수 없다.
+활성 사례의 재사용은 쓰기·삭제·벡터 갱신 없이 전체 문서 필드의 일치를 확인한다.
 `publish`는 모델·차원·입력 hash가 같은 벡터를 재사용한다.
 v8은 본문·제목을 바꾸지 않는 메타데이터/검색 개선이므로 문서 벡터를 전부 재사용했다.
-현재 검색 서비스는 v2~v8 지식·사례 14개 인덱스로 15개 할당량 중 14개를 사용한다.
+v9는 기존 14개를 삭제하지 않고 지식 색인 하나만 추가하여 15개 할당량을 모두 사용한다.
 다음 쌍을 만들기 전에는 활성·롤백 대상을 제외한 이전 버전의 명시적인 정리 계획이나 용량 검토가 필요하다.
 배포 도구가 오래된 인덱스를 자동 삭제하지는 않는다.
+로컬 직접 실행은 기본 `.env`를 읽고 배포는 검증한 `release.json`을 사용한다.
+코드가 최신이어도 기본 환경 설정이 최신이라는 뜻은 아니므로 로컬 공개 검색 설정도 활성 릴리스와 맞춘다.
 관리하는 발행 대상에서는 변경 문서를 업데이트하고 불필요한 ID를 삭제하므로 대상의 혼동을 피한다.
 `data ingest`/`corpus ingest`는 별도의 범용·비벡터 적재 경로이며 운영 하이브리드 인덱스 재발행에 사용하지 않는다.
 
 `release`는 발행 보고서의 검색 endpoint·준비된 corpus hash·발행 문서 수·검색 평가·답변 평가·검색 용량을 검증한다.
+답변 평가에서 모델 입력 근거의 존재와 최종 인용은 별도로 검사한다.
+복약 API가 실제 모델 문맥에 포함되는지 확인하면서, 해당 답변을 뒷받침하는
+공식 고혈압/복약 자료 중 적절한 자료를 인용하는 것은 허용한다.
+동일한 뜻의 경과 관찰·정기 검토 표현을 인정하며, 독립 24문항 의학 평가의 모범답안·판정 규칙은 바꾸지 않는다.
 endpoint가 없는 발행 보고서는 서비스 일치를 검증할 수 없어 새 릴리스의 근거로 사용하지 않는다.
 답변 평가는 프롬프트·시나리오·인덱스·공식 API 활성 상태도 확인한다.
 검색의 `required` 대상은 정확한 원문 URL로 판정하며 하나라도 상위 6개에 없으면 실패한다.
@@ -262,6 +275,20 @@ node --check silvercare/static/app.js
 
 실제 검색·모델 평가에는 4절의 Azure 검색 설정이 필요하다.
 음성 실측에는 허용된 WAV·정답 전사 쌍을 사용한다.
+
+새로운 [독립 의료 평가](../evaluation/README.md)는 별도 Python 프로젝트다.
+온담 API에서 답변을 수집한 뒤 `EVAL_JUDGE_DEPLOYMENT`의 평가 모델로 의미·근거를 채점한다.
+운영 `AZURE_OPENAI_DEPLOYMENT`는 바꾸지 않는다. 질문·채점 기준의 전문가 검토 전 결과는
+초안으로 표시하며, 기존 키워드·검색 회귀 평가를 임상 검증으로 대체하거나 혼동하지 않는다.
+
+평가 요청에서 실제 근거 입력을 확인하려면 서버에 `EVALUATION_TRACE_ENABLED=true`와
+32자 이상의 별도 `EVALUATION_TRACE_TOKEN`을 설정하고, 수집 명령에 `--trace`를 지정한다.
+토큰은 Git에서 제외한 개인 설정과 전용 Kubernetes Secret에만 보관한다.
+일반 요청에는 추적 정보가 추가되지 않는다. 합성 평가 문항에만 사용하며,
+운영 사용자 대화의 상시 기록이나 서버 측 추적 파일 저장은 수행하지 않는다.
+서버 기능은 기본적으로 꺼져 있고, 올바른 토큰을 보낸 명시적 평가 요청만 허용한다.
+권한 없는 추적 요청은 403으로 거절한다. 출처 본문의 일반 화면용 260자 발췌와 달리
+권한 있는 추적에는 실제 모델 입력 근거와 고유 청크 ID가 포함되므로 공유 시에도 주의한다.
 
 ```bash
 uv run python -m silvercare.evaluate \

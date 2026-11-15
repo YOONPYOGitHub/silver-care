@@ -12,7 +12,8 @@
     {
       "id": "ambiguous-medication-api",
       "request": {"message": "혈압약이랑 감기약을 같이 먹어도 괜찮아요?"},
-      "required_source_url": "https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/gnrlzHealthInfoView.do?cntnts_sn=5428",
+      "required_model_source_urls": ["https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/gnrlzHealthInfoView.do?cntnts_sn=5428"],
+      "required_source_any": ["https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/gnrlzHealthInfoView.do?cntnts_sn=5428", "https://health.kdca.go.kr/healthinfo/biz/health/gnrlzHealthInfo/gnrlzHealthInfo/gnrlzHealthInfoView.do?cntnts_sn=6698"],
       "required_concepts": [["이름", "성분"], ["약사", "의료진", "의사"]],
       "forbidden": ["그냥 같이 드세요", "혈압약을 중단하세요"],
       "max_characters": 1200
@@ -50,7 +51,7 @@
         "https://iris.who.int/server/api/core/bitstreams/7516b015-e205-43d1-883f-01f2c31af261/content#page=45",
         "https://iris.who.int/server/api/core/bitstreams/7516b015-e205-43d1-883f-01f2c31af261/content#page=47"
       ],
-      "required_concepts": [["목표", "선호", "원하는"], ["기능", "능력"], ["질환", "질병"], ["환경", "사회", "지원"], ["추적", "점검", "재평가", "다시 평가"]],
+      "required_concepts": [["목표", "선호", "원하는"], ["기능", "능력"], ["질환", "질병"], ["환경", "사회", "지원"], ["추적", "점검", "재평가", "다시 평가", "경과 관찰", "경과관찰", "정기적으로 살", "정기적인 검토"]],
       "forbidden": ["보호자가 결정해야", "치료를 중단하세요"],
       "max_characters": 1400
     },

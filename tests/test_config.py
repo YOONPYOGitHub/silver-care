@@ -23,6 +23,7 @@ def test_shareable_environment_template_contains_no_connection_or_resource_value
         "PREFER_OFFICIAL_REFERENCES": "false",
         "NONCOMMERCIAL_DATA_USE": "false",
         "CONTEXTUAL_RETRIEVAL": "false",
+        "EVALUATION_TRACE_ENABLED": "false",
         "RATE_LIMIT_PER_MINUTE": "12",
         "MAX_CONCURRENT_REQUESTS": "4",
         "TRUSTED_PROXY": "false",
@@ -37,8 +38,16 @@ def test_shareable_environment_template_contains_no_connection_or_resource_value
             for name in Settings.model_fields
         }
         | {"AIHUB_ID", "AIHUB_PASSWORD", "DATA_GO_KR_ID", "DATA_GO_KR_PASSWORD"}
+        | {"EVAL_JUDGE_ENDPOINT", "EVAL_JUDGE_DEPLOYMENT", "EVAL_TARGET_URL"}
     )
     assert set(values) == expected
+
+
+def test_evaluation_deployment_does_not_change_serving_model(monkeypatch):
+    monkeypatch.setenv("EVAL_JUDGE_DEPLOYMENT", "gpt-6-astra")
+    settings = Settings(azure_openai_deployment="gpt-6.1-terra")
+    assert settings.azure_openai_deployment == "gpt-6.1-terra"
+    assert "eval_judge_deployment" not in Settings.model_fields
 
 
 @pytest.fixture(autouse=True)

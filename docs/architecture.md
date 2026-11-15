@@ -27,6 +27,18 @@ AKS LoadBalancer → Caddy → FastAPI
 앱 시작·사용자 질문·앱 재배포 시 전체 corpus를 다시 수집하거나 임베딩하지 않는다.
 자동 수집 스케줄러·CronJob은 구현되어 있지 않다.
 
+평가용 추적은 서버 기능 플래그와 별도 토큰으로 승인된 `/api/chat` 요청에서만 응답에 추가한다.
+일반 응답 형식은 유지하며 원문 질문·검색 문맥을 서버 파일이나 일반 로그에 상시 기록하지 않는다.
+추적은 요청 단위로 생성되어 평가 클라이언트가 소유자 전용 파일로 저장한다.
+응급 고정 분기는 검색·생성보다 먼저 실행되며 의료 응급과 자해 위기 안내를 구분한다.
+증상 표현의 부정·가정·지속 기간과 새로 발생하거나 악화된 상태를 구분한다.
+변화 없는 선천적·장기적 상태와 연결된 가정문은 현재 응급상황으로 단정하지 않으며,
+분류에서 제외됐다는 사실이 의료적으로 안전하다는 뜻은 아니다.
+최근 갑작스러운 신경학적 이상이 호전된 경우나 명확한 현재 위험 신호는 즉시 도움 요청을 유지한다.
+말·효과적인 기침이 불가능한 기도폐쇄, 심한 호흡 불능, 명확한 급성 시력 소실 표현을 처리한다.
+현재 환자가 없는 수업·학습 문맥을 구분하며 단순 시야 흐림을 일괄적으로 고정 응급 판정하지 않는다.
+처치 이름만 있는 개요를 근거로 신체 위치·동작·수치·절차를 생성하지 않는다.
+
 ## 2. 리소스
 
 | 역할 | 리소스·설정 | 소유 범위 |
@@ -53,10 +65,11 @@ AKS LoadBalancer → Caddy → FastAPI
 - `.runtime/deployment.json`: 배포 URL·이미지·클러스터·검색 endpoint의 로컬 상태다.
 
 기본 템플릿의 Free 검색을 운영 검색으로 오해하지 않는다.
-운영 인덱스는 `silvercare-knowledge-v8`, `silvercare-cases-v8`이며 앱은 릴리스 설정으로 선택한다.
+운영 인덱스는 `silvercare-knowledge-v9`, `silvercare-cases-v8`이며 앱은 릴리스 설정으로 선택한다.
+변경 없는 사례는 모든 문서 필드의 일치를 검증해 쓰기 없이 재사용한다.
 `PREFER_OFFICIAL_REFERENCES=true`는 공식 안내 후보 2개를 우선 확보하고 실행 API 근거를 먼저 배치한다.
-`NONCOMMERCIAL_DATA_USE=true`는 운영자가 확인한 WHO 자료의 비상업적 이용을 기록한다.
-이 확인 없이 WHO 문서를 발행하거나 검색 결과를 생성 모델에 전달할 수 없다.
+`NONCOMMERCIAL_DATA_USE=true`는 운영자가 확인한 WHO·한국 기본소생술 지침의 비상업적 이용을 기록한다.
+이 확인 없이 해당 문서를 발행하거나 검색 결과를 생성 모델에 전달할 수 없다.
 `CONTEXTUAL_RETRIEVAL=true`는 v8 메타데이터 기반 검색·부모 문맥 결합·명시적인 일상 대화의
 검색 생략을 켠다. 기본값은 `false`이며 이전 인덱스에서 켜지 않는다.
 별도 Free 검색의 파일럿 인덱스는 운영 답변에 사용하지 않는다.
@@ -79,6 +92,7 @@ AKS LoadBalancer → Caddy → FastAPI
 | [corpus.py](../silvercare/corpus.py) | 등록된 AI Hub 파일의 다운로드·receipt·준비 CLI |
 | [external_sources.py](../silvercare/external_sources.py) | 공식 문서·XML·복지/기관 API 수집·출처·부분 실패 보고 |
 | [clinical_sources.py](../silvercare/clinical_sources.py) | WHO·VA·FDA·openFDA의 제한된 수집·판본/권한 확인·표/라벨 구조 보관 |
+| [targeted_sources.py](../silvercare/targeted_sources.py) | 성인 기도폐쇄·영양제·저혈당·머리 부상의 고정 절 선택·재사용 조건 확인·범위 보존 |
 | [retrieval.py](../silvercare/retrieval.py) | 원천 분류·보수적 질문 범위·약명 별칭·부모 문맥 결합·근거에 등장한 용어 대응 |
 | [expanded.py](../silvercare/expanded.py) | 지식·사례·holdout 구성·임베딩 캐시·버전 인덱스 발행·릴리스 검증 |
 | [evaluate.py](../silvercare/evaluate.py) | 검색·실제 답변·음성 평가 |

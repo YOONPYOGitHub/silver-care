@@ -94,12 +94,13 @@ BY_ID = {topic.id: topic for topic in TOPICS}
 
 def select_topics(message: str, history: list[Message]) -> list[HealthTopic]:
     def matching(text: str) -> list[HealthTopic]:
-        return [
+        matches = [
             topic.public()
             for topic in TOPICS
             if re.search(topic.pattern, text)
             and not (topic.exclude_pattern and re.search(topic.exclude_pattern, text))
         ]
+        return sorted(matches, key=lambda topic: topic.id != "5428")
 
     matches = matching(message)
     if matches:

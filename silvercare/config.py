@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     prefer_official_references: bool = False
     noncommercial_data_use: bool = False
     contextual_retrieval: bool = False
+    evaluation_trace_enabled: bool = False
+    evaluation_trace_token: SecretStr = SecretStr("")
     azure_speech_endpoint: str = "https://ai-foundry-m098047.cognitiveservices.azure.com"
     azure_speech_resource_id: str = ""
     azure_speech_region: str = "koreacentral"
@@ -81,6 +83,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def production_guards(self) -> Self:
+        if (
+            self.evaluation_trace_enabled
+            and len(self.evaluation_trace_token.get_secret_value()) < 32
+        ):
+            raise ValueError("Evaluation traces require a separate token of at least 32 characters")
         if self.retrieval_mode == "hybrid" and not self.azure_embedding_deployment:
             raise ValueError("Hybrid retrieval requires AZURE_EMBEDDING_DEPLOYMENT")
         if self.app_env == "production":

@@ -118,7 +118,14 @@ def kubernetes_resources(
     speech_resource_id: str,
     retrieval: dict[str, str] | None = None,
     kdca_key: SecretStr | None = None,
+    *,
+    evaluation_trace_enabled: bool = False,
+    evaluation_trace_token: SecretStr | None = None,
 ) -> list[dict[str, Any]]:
+    if evaluation_trace_enabled and (
+        evaluation_trace_token is None or len(evaluation_trace_token.get_secret_value()) < 32
+    ):
+        raise ValueError("Evaluation traces require a separate token of at least 32 characters")
     config = {
         "APP_ENV": "production",
         "PUBLIC_ORIGIN": f"https://{host}",
@@ -155,7 +162,7 @@ def kubernetes_resources(
         "runAsGroup": 10001,
         "seccompProfile": {"type": "RuntimeDefault"},
     }
-    app_container = {
+    app_container: dict[str, Any] = {
         "name": "app",
         "image": image,
         "ports": [{"containerPort": 8000}],
@@ -191,6 +198,19 @@ def kubernetes_resources(
                 },
             }
         ]
+    if evaluation_trace_enabled:
+        config["EVALUATION_TRACE_ENABLED"] = "true"
+        app_container.setdefault("env", []).append(
+            {
+                "name": "EVALUATION_TRACE_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": "silvercare-evaluation",
+                        "key": "EVALUATION_TRACE_TOKEN",
+                    }
+                },
+            }
+        )
     caddyfile = (
         "{\n  http_port 8080\n  https_port 8443\n  admin off\n"
         "  servers {\n    max_header_size 32KB\n  }\n}\n"
@@ -382,6 +402,17 @@ def kubernetes_resources(
                 stringData={"KDCA_HEALTH_API_KEY": kdca_key.get_secret_value()},
             ),
         )
+    if evaluation_trace_enabled:
+        assert evaluation_trace_token is not None
+        resources.insert(
+            1,
+            resource(
+                "Secret",
+                "silvercare-evaluation",
+                type="Opaque",
+                stringData={"EVALUATION_TRACE_TOKEN": evaluation_trace_token.get_secret_value()},
+            ),
+        )
     return resources
 
 
@@ -497,6 +528,7 @@ def deploy(skip_infra: bool, skip_build: bool, tag: str) -> None:
         "--overwrite-existing",
     )
     kubeconfig.chmod(0o600)
+    app_settings = Settings()
     resources = kubernetes_resources(
         image,
         output["identityClientId"],
@@ -505,7 +537,9 @@ def deploy(skip_infra: bool, skip_build: bool, tag: str) -> None:
         output["searchEndpoint"],
         foundry_id,
         retrieval,
-        Settings().kdca_health_api_key,
+        app_settings.kdca_health_api_key,
+        evaluation_trace_enabled=app_settings.evaluation_trace_enabled,
+        evaluation_trace_token=app_settings.evaluation_trace_token,
     )
     command(
         kubectl,

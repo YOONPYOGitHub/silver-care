@@ -600,3 +600,141 @@ async def test_publish_checks_both_evidence_files_before_any_remote_mutation(tmp
     (tmp_path / "cases.jsonl").write_text(document.model_dump_json() + "\n")
     with pytest.raises(ValueError, match="evidence kinds"):
         await expanded.publish()
+
+
+@pytest.mark.parametrize("changed", [False, True])
+async def test_live_case_reuse_verifies_all_fields_without_mutation(tmp_path, changed):
+    document = SearchDocument(
+        id="case-one",
+        title="Synthetic dialogue",
+        content="Synthetic reference case",
+        source_url="https://example.test/source",
+        dataset_id="synthetic",
+        evidence_kind="dialogue",
+        license="synthetic",
+        updated_at="2026-11-15",
+    )
+    path = tmp_path / "cases.jsonl"
+    path.write_text(document.model_dump_json() + "\n")
+    indexed = document.model_dump()
+    if changed:
+        indexed["content"] = "Unexpected remote change"
+
+    def handle(request):
+        assert request.method == "POST"
+        assert request.url.path.endswith("/docs/search")
+        return httpx.Response(200, json={"value": [indexed]})
+
+    service = make_services(handle)
+    service.settings.azure_search_case_index = expanded.CASE_INDEX
+    try:
+        if changed:
+            with pytest.raises(ValueError, match="refusing read-only reuse"):
+                await expanded.verify_reused_cases(service, expanded.CASE_INDEX, path)
+        else:
+            report = await expanded.verify_reused_cases(service, expanded.CASE_INDEX, path)
+            assert report["publication_mode"] == "verified_read_only_reuse"
+            assert report["uploaded_changes"] == 0
+            assert report["new_embeddings"] == 0
+    finally:
+        await service.close()
+
+
+def test_repreparing_unchanged_cases_preserves_their_original_preparation_date(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "data/processed/expanded"
+    output.mkdir(parents=True)
+    (tmp_path / "data/catalog.json").write_text('{"sources":[]}')
+    reference = SearchDocument(
+        id="reference",
+        title="Synthetic reference",
+        content="Synthetic reference content",
+        source_url="https://example.test/source",
+        dataset_id="ondam-reference-v1",
+        evidence_kind="reference",
+        license="synthetic",
+        updated_at="2026-11-14",
+    )
+    (tmp_path / "data/processed/reference.jsonl").write_text(reference.model_dump_json() + "\n")
+    old = reference.model_copy(
+        update={"id": "case", "evidence_kind": "dialogue", "dataset_id": "synthetic"}
+    )
+    expanded.annotate_documents([old])
+    expanded.write_documents(output / "cases.jsonl", [old])
+    before = (output / "cases.jsonl").read_bytes()
+    candidate = old.model_copy(update={"updated_at": "2026-11-15"})
+    monkeypatch.setattr(expanded, "case_documents", lambda _: ([candidate], [], {}))
+    expanded.prepare_expanded(None)
+    assert (output / "cases.jsonl").read_bytes() == before
+
+
+async def test_korean_bls_reference_requires_noncommercial_confirmation(caplog):
+    service = make_services(lambda _: pytest.fail("License check is local"))
+    try:
+        with pytest.raises(UpstreamError):
+            service.check_reference_license([{"dataset_id": "korean-bls-2025"}])
+        assert "noncommercial" in caplog.text
+        service.settings.noncommercial_data_use = True
+        service.check_reference_license([{"dataset_id": "korean-bls-2025"}])
+    finally:
+        await service.close()
+
+
+@pytest.mark.parametrize("include_medication_evidence", [True, False])
+async def test_audience_distinguishes_model_evidence_from_valid_alternative_citation(
+    tmp_path, monkeypatch, include_medication_evidence
+):
+    from silvercare import evaluate
+
+    monkeypatch.chdir(tmp_path)
+    corpus = tmp_path / "data/processed/expanded"
+    corpus.mkdir(parents=True)
+    for name in ["knowledge.jsonl", "cases.jsonl"]:
+        (corpus / name).write_text("synthetic")
+    medicine, pressure = "https://example.test/medication", "https://example.test/pressure"
+    references = [
+        {
+            "id": str(i),
+            "title": "Synthetic evidence",
+            "content": "Synthetic evidence text.",
+            "source_url": url,
+            "updated_at": "",
+            "evidence_kind": "reference",
+        }
+        for i, url in enumerate([pressure, medicine] if include_medication_evidence else [pressure])
+    ]
+
+    def handle(request):
+        if request.url.path.endswith("/responses"):
+            return httpx.Response(
+                200,
+                json={
+                    "status": "completed",
+                    "model": "test",
+                    "output": [{"content": [{"type": "output_text", "text": "확인하세요.[1]"}]}],
+                },
+            )
+        return httpx.Response(200, json={"value": references})
+
+    service = make_services(handle)
+    monkeypatch.setattr(evaluate, "AzureServices", lambda _: service)
+    scenarios = tmp_path / "scenarios.json"
+    scenarios.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "id": "evidence-vs-citation",
+                        "request": {"message": "복약 상담"},
+                        "required_model_source_urls": [medicine],
+                        "required_source_any": [pressure, medicine],
+                    }
+                ]
+            }
+        )
+    )
+    report = await evaluate.evaluate_audience(scenarios, tmp_path / "report.json")
+    assert report["passed"] is include_medication_evidence
+    assert (medicine in report["cases"][0]["model_source_urls"]) is include_medication_evidence

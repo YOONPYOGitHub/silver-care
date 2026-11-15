@@ -30,6 +30,10 @@ def test_system_instructions_are_a_single_current_audience_policy():
     assert "2~4가지" not in SYSTEM_PROMPT
     assert "업데이트" not in SYSTEM_PROMPT
     assert SYSTEM_PROMPT.count("당신은 ") == 1
+    assert "변화 없는 만성·선천적 상태" in SYSTEM_PROMPT
+    assert "119 안내를 일률적으로 덧붙이지 마세요." in SYSTEM_PROMPT
+    assert "명확한 응급상황에서 확인 질문이나 자료 검색 때문에" in SYSTEM_PROMPT
+    assert "이때 안전한 도움 요청을 안내하세요." not in SYSTEM_PROMPT
 
 
 def make_services(handler):
@@ -396,5 +400,23 @@ async def test_medical_reply_adds_one_compact_display_notice_and_keeps_raw_api_g
             assert "AI Hub" in result.display_notice
             assert "전문가 검토 전" in result.display_notice
         assert len(result.display_notice) < len(result.notice) + len(result.medical_caution)
+    finally:
+        await service.close()
+async def test_query_normalization_content_filter_is_not_reported_as_search_outage():
+    service = make_services(
+        lambda _: httpx.Response(
+            200,
+            json={
+                "status": "incomplete",
+                "incomplete_details": {"reason": "content_filter"},
+                "output": [],
+            },
+        )
+    )
+    try:
+        with pytest.raises(UpstreamError) as error:
+            await service.expand_query("합성 검색 질문", [])
+        assert error.value.service == "model"
+        assert error.value.code == "content_filter"
     finally:
         await service.close()
