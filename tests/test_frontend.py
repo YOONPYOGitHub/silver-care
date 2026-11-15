@@ -105,6 +105,7 @@ function fixture(settings = {}) {
   document.hidden = false;
   document.body = new Element("body");
   document.documentElement = new Element("html");
+  if (settings.basePath) document.documentElement.setAttribute("data-base-path", settings.basePath);
   document.documentElement.style.setProperty = function (key, value) { this[key] = value; };
   document.getElementById = element;
   element("messages").scrollContainer = element("conversation-scroll");
@@ -260,11 +261,18 @@ function fixture(settings = {}) {
       static revokeObjectURL() {}
     },
     fetch: async (path, options) => {
+      const requestPath = path;
+      if (settings.basePath) {
+        assert(path.startsWith(settings.basePath + "/"), "Never call a different profile's API");
+        path = path.slice(settings.basePath.length);
+      }
       if (path === "/api/config") return json({
         voice_enabled: settings.voiceEnabled ?? true,
         search_enabled: true, health_info_enabled: false,
+        service_variant: settings.variant ?? "azure",
+        request_timeout_ms: settings.requestTimeout ?? 120000,
       });
-      requests.push({ path, options });
+      requests.push({ path: requestPath, options });
       if (path.startsWith("/api/speech/") || path === "/api/chat") {
         assert(
           !streams.some((stream) => !stream.track.stops), "Stop microphone before server requests",
@@ -394,6 +402,20 @@ assert.equal(app.plays(), 1);
 assert.equal(app.createdURLs.length, 1);
 assert.equal(app.permissions.length, 0);
 """)
+
+    def test_comparison_api_and_images_stay_within_their_profile_prefix(self):
+        self.run_javascript(
+            r"""
+await app.send("서비스 구분 확인입니다.");
+assert.equal(app.requests[0].path, "/local-rag/api/chat");
+const reply = app.element("messages").lastElementChild;
+assert.equal(reply.childNodes[0].src, "/local-rag/static/mark.svg");
+assert.equal(app.element("variant-notice").hidden, false);
+assert(app.element("variant-notice").textContent.includes("Azure"));
+assert.equal(app.permissions.length, 0);
+""",
+            '{basePath: "/local-rag", variant: "local-rag", requestTimeout: 600000}',
+        )
 
     def test_complete_voice_turn_uses_shared_memory_and_waits_for_playback_end(self):
         self.run_javascript(r"""

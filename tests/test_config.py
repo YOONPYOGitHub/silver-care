@@ -8,6 +8,7 @@ from dotenv import dotenv_values
 
 from silvercare.config import DataSourceSettings, Settings
 from silvercare.data import download_aihub
+from silvercare.foundry_gateway import FoundryGatewaySettings
 
 
 def test_shareable_environment_template_contains_no_connection_or_resource_values():
@@ -27,6 +28,9 @@ def test_shareable_environment_template_contains_no_connection_or_resource_value
         "RATE_LIMIT_PER_MINUTE": "12",
         "MAX_CONCURRENT_REQUESTS": "4",
         "TRUSTED_PROXY": "false",
+        "SERVICE_VARIANT": "azure",
+        "LOCAL_REQUEST_TIMEOUT": "600",
+        "FOUNDRY_TIMEOUT": "600",
     }
     assert values
     for key, value in values.items():
@@ -39,6 +43,7 @@ def test_shareable_environment_template_contains_no_connection_or_resource_value
         }
         | {"AIHUB_ID", "AIHUB_PASSWORD", "DATA_GO_KR_ID", "DATA_GO_KR_PASSWORD"}
         | {"EVAL_JUDGE_ENDPOINT", "EVAL_JUDGE_DEPLOYMENT", "EVAL_TARGET_URL"}
+        | {"FOUNDRY_" + name.upper() for name in FoundryGatewaySettings.model_fields}
     )
     assert set(values) == expected
 

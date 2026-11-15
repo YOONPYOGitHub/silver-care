@@ -1,6 +1,6 @@
 # 아키텍처와 코드 구조
 
-코드·릴리스 설정 확인 기준일: 2026-11-12.
+코드·릴리스 설정 확인 기준일: 2026-11-16.
 자료별 사용 방식은 [RAG·API](rag.md), 실행 방법은 [운영 절차](operations.md)에 있다.
 
 ## 1. 서비스 구조
@@ -27,6 +27,29 @@ AKS LoadBalancer → Caddy → FastAPI
 앱 시작·사용자 질문·앱 재배포 시 전체 corpus를 다시 수집하거나 임베딩하지 않는다.
 자동 수집 스케줄러·CronJob은 구현되어 있지 않다.
 
+### 비교 서비스의 독립 경로
+
+```text
+같은 Caddy HTTPS 호스트
+ ├─ /             → silvercare       → 기존 GPT·Azure AI Search
+ ├─ /local-rag/   → silvercare-local → Foundry gateway → Qwen 생성·임베딩
+ │                                   ├─ OpenSearch BM25/HNSW → RRF → BGE 재정렬
+ │                                   └─ 질병관리청 실행 API
+ └─ /local-only/  → silvercare-local → 같은 gateway·Qwen 생성만 사용
+                                     검색·사례·임베딩·질병관리청 조회 없음
+각 앱 → 기존 Azure Speech
+```
+
+`azure`, `local-rag`, `local-only`는 코드 복사본이 아닌 설정 프로필이다.
+각 앱의 HTML·이미지·JavaScript·API는 해당 URL 접두사 안에서 동작한다.
+비교 앱은 생성 모델·검색 연결 오류 시 기존 GPT나 Azure AI Search로 우회하지 않는다.
+모델 단독도 일반 학습 지식으로 답하도록 하며, 검색 근거가 없다는 이유로 답변을 강제로 막지 않는다.
+출처를 생성하지 않고 모델 지식 기반임을 표시하며 공통 응급·의료·개인정보 방침을 유지한다.
+
+`local-*`는 비교 프로필의 식별자이며 실제 오프라인·휴대폰 실행을 뜻하지 않는다.
+생성·임베딩은 Foundry 호스팅, 재정렬과 검색은 AKS 실행이다.
+클라우드 모델 정밀도와 휴대폰 양자화 모델, 서버와 휴대폰의 실행 자원은 동일하지 않다.
+
 평가용 추적은 서버 기능 플래그와 별도 토큰으로 승인된 `/api/chat` 요청에서만 응답에 추가한다.
 일반 응답 형식은 유지하며 원문 질문·검색 문맥을 서버 파일이나 일반 로그에 상시 기록하지 않는다.
 추적은 요청 단위로 생성되어 평가 클라이언트가 소유자 전용 파일로 저장한다.
@@ -52,9 +75,17 @@ AKS LoadBalancer → Caddy → FastAPI
 | 임베딩 | `silvercare-embedding`, `text-embedding-3-small`, 512차원 | 같은 Foundry 계정 |
 | 음성 | Foundry 계정의 Speech endpoint, `ko-KR-SunHiNeural` | 선택형 STT/TTS |
 | HTTPS | Caddy·공개 IP·영속 인증서 디스크 | LoadBalancer의 80/443 |
+| 비교 생성 | `ondam-qwen-4b`, Qwen3.5-4B | Foundry GlobalManagedCompute, A100 80GB 1개 |
+| 비교 임베딩 | `ondam-qwen-embedding`, Qwen3-Embedding-0.6B, 1024차원 | 별도 GlobalManagedCompute, A100 80GB 1개 |
+| 비교 검색·재정렬 | OpenSearch 3.3.2, BGE-reranker-v2-m3 FP32 ONNX | 별도 `silvercare-local` namespace, ClusterIP |
+| 비교 AKS 노드 | `localmem`, Standard_D8ds_v5 1개, 8 vCPU / 32GiB | `workload=local-ai` label·전용 taint, 검색·재정렬·비교 앱 |
 
 공유 Foundry 계정의 전역 정책·다른 프로젝트 학습을 앱 배포에서 수정하지 않는다.
 `GlobalStandard`는 계정 위치와 추론 처리 위치가 같다고 보장하지 않는다.
+비교 모델은 Serverless가 아닌 **Managed-compute 탭**에서 확인한다.
+두 A100 배포는 시간 단위 과금이며 휴대폰급 자원 제한을 적용한 측정 환경이 아니다.
+재정렬의 8192-token 문맥과 비절단 처리를 유지하기 위해 32GiB 노드를 사용한다.
+16GiB 노드에서 10GiB 컨테이너 한도로 실행한 전체 문맥 warm-up은 OOM 종료됐다.
 
 ### 템플릿과 활성 설정
 
@@ -81,6 +112,11 @@ AKS LoadBalancer → Caddy → FastAPI
 | --- | --- |
 | [app.py](../silvercare/app.py) | FastAPI·수명주기·라우트·출처 검증·요청 제한·오류 응답 |
 | [azure.py](../silvercare/azure.py) | 현재 시스템 지침·검색어 확장·질문 임베딩·검색·API 근거 결합·생성·인용 검증·음성 |
+| [local_services.py](../silvercare/local_services.py) | 소형 모델 RAG/단독 프로필, 공통 파이프라인의 생성·검색 교체 |
+| [foundry_gateway.py](../silvercare/foundry_gateway.py) | Workload Identity로 관리형 Qwen 추론, 응답 정규화·정확한 임베딩 토큰 한도 검증 |
+| [offline_search.py](../silvercare/offline_search.py) | OpenSearch 필터·BM25/HNSW·RRF·재정렬·부모 문맥 조회 |
+| [offline_ingest.py](../silvercare/offline_ingest.py) | 준비된 지식·사례의 신규 OpenSearch 인덱스 발행·holdout·벡터·수량 검증 |
+| [deploy_comparison.py](../silvercare/deploy_comparison.py) | 비교 namespace·배포·Foundry 모델 명세·기존 경로를 보존하는 Caddy 설정 |
 | [health.py](../silvercare/health.py) | 21개 허용 주제·주제 연결·질병관리청 XML·TLS·캐시·근거 문단 선별 |
 | [models.py](../silvercare/models.py) | 대화·출처·공식 건강정보의 요청·응답 타입 |
 | [speech_text.py](../silvercare/speech_text.py) | 화면 답변을 읽기용 텍스트로 변환·출처 목록/서식 기호 제외 |
@@ -103,6 +139,7 @@ AKS LoadBalancer → Caddy → FastAPI
 | 경로 | 동작 |
 | --- | --- |
 | `GET /health/live` | 앱 프로세스 응답. 모든 외부 의존성의 종합 상태는 아님 |
+| `GET /health/ready` | 비교 앱은 gateway·검색 인덱스·재정렬 의존성 점검. 실제 Foundry 추론 성공은 별도 검증 필요 |
 | `GET /api/config` | 기능 활성 여부. 모델명·인증키는 반환하지 않음 |
 | `POST /api/chat` | 검색·질병관리청 근거를 이용한 답변 |
 | `GET /api/health-topics` | 설정된 21개 건강 주제. API 키가 없으면 빈 목록 |

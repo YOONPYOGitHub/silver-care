@@ -14,7 +14,7 @@ import httpx
 from azure.core.exceptions import ClientAuthenticationError
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -98,7 +98,14 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.health = HealthService(config.kdca_health_api_key)
-        app.state.azure = services or AzureServices(config, health_service=app.state.health)
+        if services is not None:
+            app.state.azure = services
+        elif config.service_variant == "azure":
+            app.state.azure = AzureServices(config, health_service=app.state.health)
+        else:
+            from silvercare.local_services import LocalServices
+
+            app.state.azure = LocalServices(config, health_service=app.state.health)
         try:
             yield
         finally:
@@ -227,13 +234,28 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
     async def live() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/health/ready")
+    async def ready(request: Request) -> dict[str, str]:
+        if config.service_variant != "azure":
+            await request.app.state.azure.ready()
+        return {"status": "ok"}
+
     @app.get("/api/config")
     async def public_config() -> dict[str, Any]:
         return {
             "name": "온담",
-            "search_enabled": bool(config.azure_search_endpoint),
+            "search_enabled": (
+                bool(config.azure_search_endpoint)
+                if config.service_variant == "azure"
+                else config.service_variant == "local-rag"
+            ),
             "voice_enabled": bool(config.azure_speech_resource_id),
-            "health_info_enabled": bool(config.kdca_health_api_key.get_secret_value()),
+            "health_info_enabled": config.service_variant != "local-only"
+            and bool(config.kdca_health_api_key.get_secret_value()),
+            "service_variant": config.service_variant,
+            "request_timeout_ms": 120000
+            if config.service_variant == "azure"
+            else config.local_request_timeout * 1000,
         }
 
     @app.post("/api/chat", response_model=ChatResponse, dependencies=guarded)
@@ -255,7 +277,11 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
             result = await request.app.state.azure.chat(payload)
         else:
             result = await request.app.state.azure.chat(payload, trace=trace)
-        if result.mode != "emergency" and config.kdca_health_api_key.get_secret_value():
+        if (
+            config.service_variant != "local-only"
+            and result.mode != "emergency"
+            and config.kdca_health_api_key.get_secret_value()
+        ):
             result.health_topics = select_topics(payload.message, payload.history)
         if trace is not None:
             trace.data["response_mode"] = result.mode
@@ -266,13 +292,16 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
 
     @app.get("/api/health-topics", response_model=list[HealthTopic])
     async def health_topics() -> list[HealthTopic]:
-        if not config.kdca_health_api_key.get_secret_value():
+        if (
+            config.service_variant == "local-only"
+            or not config.kdca_health_api_key.get_secret_value()
+        ):
             return []
         return [topic.public() for topic in TOPICS]
 
     @app.get("/api/health-info/{content_id}", response_model=HealthArticle, dependencies=guarded)
     async def health_article(content_id: str, request: Request) -> HealthArticle:
-        if content_id not in BY_ID:
+        if config.service_variant == "local-only" or content_id not in BY_ID:
             raise HTTPException(404, "선택한 건강정보를 찾을 수 없어요.")
         article: HealthArticle = await request.app.state.health.article(content_id)
         return article
@@ -299,7 +328,17 @@ def create_app(settings: Settings | None = None, services: AzureServices | None 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/")
-    async def index() -> FileResponse:
+    async def index() -> Response:
+        if config.base_path:
+            html = (STATIC / "index.html").read_text()
+            html = (
+                html.replace(
+                    '<html lang="ko">', f'<html lang="ko" data-base-path="{config.base_path}">'
+                )
+                .replace('="/static/', f'="{config.base_path}/static/')
+                .replace('href="/"', f'href="{config.base_path}/"')
+            )
+            return HTMLResponse(html)
         return FileResponse(STATIC / "index.html")
 
     return app

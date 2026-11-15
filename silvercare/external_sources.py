@@ -33,7 +33,7 @@ from pdfplumber.utils.exceptions import PdfminerException
 
 from silvercare.config import DataSourceSettings
 from silvercare.data import SearchDocument, chunks
-from silvercare.privacy import normalize, redact
+from silvercare.privacy import normalize, redact, redact_source
 
 MOHW_PAGE = "https://www.mohw.go.kr/board.es?mid=a10411010100&bid=0019&act=view&list_no=1491777"
 MOHW_DOWNLOAD = "https://www.mohw.go.kr/boardDownload.es?bid=0019&list_no=1491777&seq=3"
@@ -1054,17 +1054,7 @@ def document_records(
     for record in records:
         if not safe_url(record.url):
             raise CollectionError("invalid_provenance", "Missing or unsafe public provenance URL")
-        contacts: dict[str, str] = {}
-        text = record.text
-        if dataset == "mohw-welfare-senior-2026":
-            # Only preserve publisher-marked institutional landlines, never personal mobile numbers.
-            for contact in dict.fromkeys(re.findall(r"☎\s*0[2-6]\d?[- ]\d{3,4}[- ]\d{4}", text)):
-                marker = f"[공식문의{len(contacts)}]"
-                contacts[marker] = contact
-                text = text.replace(contact, marker)
-        text = redact(text)
-        for marker, contact in contacts.items():
-            text = text.replace(marker, contact)
+        text = redact_source(record.text, dataset)
         digest = hashlib.sha256(text.encode()).hexdigest()
         if digest in seen:
             duplicate_count += 1

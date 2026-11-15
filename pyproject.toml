@@ -11,6 +11,7 @@ dependencies = [
   "pdfplumber>=0.11.10,<0.12",
   "pydantic-settings>=2.11,<3",
   "python-multipart>=0.0.20,<1",
+  "tokenizers>=0.22,<0.23",
   "uvicorn[standard]>=0.38,<1",
 ]
 

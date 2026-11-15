@@ -20,6 +20,40 @@ API 자료도 수집·문서화·임베딩할 수 있다. 모든 API를 채팅 �
 임베딩·API 조회·RAG는 모델 재학습이 아니다.
 사용자 질문에 맞는 근거를 모델 입력에 넣어 답변하며, 가중치나 KD checkpoint는 변경하지 않는다.
 
+### 소형 모델 비교 프로필
+
+`local-rag`는 같은 준비 지식 6,562개와 사례 6,762개를 별도 OpenSearch
+`local-knowledge-v1`, `local-cases-v1`에 저장한다.
+기존 Azure 인덱스·릴리스는 수정하지 않으며 평가 holdout 1,721개는 적재하지 않는다.
+원본 split이 Validation인 자료도 안정적인 평가 분할에서 runtime으로 선택된 사례이면 포함한다.
+
+- 생성·검색어 확장: Foundry Qwen3.5-4B. 두 비교 앱 모두 비사고 모드,
+  temperature 0.2, top_p 0.9, seed 42, 답변 최대 1300 tokens를 사용한다.
+  RAG에서는 긴 근거 뒤 최신 질문에 같은 인용·단위 보존 규칙을 다시 전달한다.
+  누락된 인용을 서버에서 임의로 만들어 붙이지 않는다.
+- 벡터: Foundry Qwen3-Embedding-0.6B, 1024차원. 질문에만 검색 instruction을 붙이고
+  문서에는 제목과 본문을 넣는다. 기존 Azure의 512차원 벡터와 혼용하지 않는다.
+- 비절단 검증: 관리형 임베딩 템플릿은 초과 입력을 16384 tokens로 자동 절단하므로
+  gateway가 고정된 원본 tokenizer로 **요청 전에** 정확히 길이를 검사하고 초과 시 거절한다.
+  응답의 사용 토큰 합계도 입력과 같아야 한다. 실제 corpus의 최대 입력은 지식 1213,
+  사례 624 tokens다.
+- 검색: stock OpenSearch의 CJK 분석기와 BM25, Lucene HNSW cosine 검색,
+  RRF(k=60), BGE 재정렬을 사용한다. Azure semantic ranker나 한국어 Nori와 동일한 점수를
+  보장하는 대체물이 아니며 검색 품질은 별도 평가 대상이다.
+- 재정렬: `BAAI/bge-reranker-v2-m3`의 FP32 ONNX export
+  `woxpas-ai/bge-reranker-v2-m3-onnx`, revision
+  `c44ebc43de724ae8816668bb44d2e728e17faa18`. TEI CPU runtime digest를 고정하며
+  제3자 export라는 점을 원본 모델과 구분한다. 8192-token 문맥과 `auto_truncate=false`를 유지한다.
+  lexical/vector 합집합이 64개를 넘으면 후보를 버리지 않고 나눠 재정렬한다.
+- 기존 분야·약물·자료 유형 필터, 부모/인접 청크, 사실/사례 구분, 출처·이용조건 검증,
+  실행 시 질병관리청 근거 결합은 공통 파이프라인을 사용한다.
+
+`local-only`는 같은 생성 모델로 학습 지식만 사용한다. 검색·임베딩·검색어 확장·사례·
+질병관리청 근거·추가 건강정보를 사용하지 않으며 출처는 빈 목록이다.
+근거 부재를 이유로 일반 지식을 설명하지 못하도록 제한하지 않고, 임의 출처 번호는 오류로 처리한다.
+세 프로필 모두 공통 응급 고정 안내와 의료·개인정보 방침을 유지한다.
+Azure Speech는 비교 프로필에서도 온라인 서비스다.
+
 ## 2. 임베딩한 자료
 
 활성 설정은 `data/processed/expanded/release.json`,

@@ -4,7 +4,28 @@
 가족을 돌보는 보호자도 이용할 수 있다. 기본은 텍스트 모드이며 음성 모드에서 말로 대화를 이어갈 수 있다.
 
 서비스: <https://ondam-e4b60458.koreacentral.cloudapp.azure.com>
-소스 저장소: <https://github.com/YOONPYOGitHub/silver-care> (비공개)
+소스 저장소: <https://github.com/YOONPYOGitHub/silver-care>
+
+## 세 가지 비교 서비스
+
+| 버전 | 접속 주소 | 생성·검색 |
+| --- | --- | --- |
+| Azure 기준 | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/> | GPT-6.1-Terra + Azure AI Search |
+| 소형 모델 + RAG | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/local-rag/> | Qwen3.5-4B + Qwen3-Embedding-0.6B + OpenSearch + BGE 재정렬 |
+| 소형 모델 단독 | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/local-only/> | 같은 Qwen3.5-4B, 검색·임베딩·검색어 확장·질병관리청 근거 조회 없음 |
+
+하나의 코드베이스에서 `SERVICE_VARIANT`와 독립 Deployment·Service·URL로 구분한다.
+Azure 기준 서비스의 배포 이미지는 `azure-baseline-20261116-3b2c666`으로 유지한다.
+비교 기능은 `feature/foundry-model-comparison` 브랜치에서 관리하며 자동으로 main에 병합하지 않는다.
+세 버전 모두 Azure STT/TTS와 공통 응급 안내·개인정보 최소화·화면 기능을 사용한다.
+질병관리청 실행 API는 Azure 기준과 소형 모델 + RAG에서 유지한다.
+
+**비교 버전도 실제로는 온라인 Azure 서비스다.** 소형 생성·임베딩 모델은 Foundry
+Managed-compute에 각각 A100 80GB 1개로 호스팅하며, OpenSearch와 BGE 재정렬만 AKS에서 실행한다.
+이 배포는 모델 크기·답변·검색 효과를 비교하기 위한 것으로, 보급형 휴대폰의 속도·메모리·배터리나
+양자화 모델의 품질을 입증하지 않는다. Managed-compute는 토큰 사용량이 아닌
+컴퓨트 가동 시간 기준의 유료 리소스이며, 앱에 요청이 없어도 비용이 발생할 수 있다.
+배포·적재·재현 방법은 [비교 서비스 운영](docs/operations.md#세-가지-비교-서비스)에 있다.
 
 ## 문서
 

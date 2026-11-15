@@ -162,6 +162,7 @@ html,body{height:100%;overflow:hidden}
 .main-content{display:grid;grid-template-rows:minmax(0,1fr) auto;min-height:0;overflow:hidden}
 .conversation-scroll{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;padding:24px 12px 24px 4px;scroll-padding-block:20px}
 .conversation-scroll:focus-visible{outline:2px solid #bc8944;outline-offset:-3px}
+.variant-notice{margin:0 0 16px;padding:12px 14px;border:1px solid #c9d6c3;border-radius:10px;background:#edf3e9;color:#405b48;font-size:14px;line-height:1.7}
 .right-panel{position:static;top:auto;align-self:stretch;max-height:none;min-height:0;height:100%;overflow-y:auto;overscroll-behavior:contain;padding:24px 0}
 .conversation-dock{position:relative;display:flex;flex-direction:column;margin:0;padding:12px 4px max(10px,env(safe-area-inset-bottom));border-top:1px solid #dfe7d9;background:#f7f8f4;min-height:0;max-height:min(320px,calc(var(--app-height,100dvh) - 100px));overflow:hidden}
 .dock-content{flex:0 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}

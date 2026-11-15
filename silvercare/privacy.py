@@ -34,3 +34,17 @@ def redact(text: str) -> str:
     for pattern, replacement in PATTERNS:
         result = pattern.sub(replacement, result)
     return result
+
+
+def redact_source(text: str, dataset_id: str) -> str:
+    contacts: dict[str, str] = {}
+    if dataset_id == "mohw-welfare-senior-2026":
+        # Preserve only the publisher-marked institutional landlines in this verified guide.
+        for contact in dict.fromkeys(re.findall(r"☎\s*0[2-6]\d?[- ]\d{3,4}[- ]\d{4}", text)):
+            marker = f"[공식문의{len(contacts)}]"
+            contacts[marker] = contact
+            text = text.replace(contact, marker)
+    text = redact(text)
+    for marker, contact in contacts.items():
+        text = text.replace(marker, contact)
+    return text

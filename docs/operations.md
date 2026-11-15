@@ -1,6 +1,6 @@
 # 실행·수집·배포·검증
 
-자료·릴리스 설정 확인 기준일: 2026-11-13.
+자료·릴리스 설정 확인 기준일: 2026-11-16.
 프로젝트 루트에서 실행한다. 구조는 [아키텍처](architecture.md), 데이터 의미는 [RAG·API](rag.md)를 따른다.
 
 ## 1. 설정과 비밀값
@@ -40,6 +40,108 @@
 검증을 끄거나 HTTP로 키를 보내지 않는다.
 GET 요청의 `TOKEN`은 `httpx` 로그에서 가리고, 리다이렉트를 따라 전달하지 않는다.
 POST는 실제 404로 응답해 이 API에서 사용하지 않는다.
+
+## 세 가지 비교 서비스
+
+기존 root URL의 앱 이미지는 `azure-baseline-20261116-3b2c666`으로 고정한다.
+비교 앱은 `silvercare-local` namespace의 독립 Deployment·Service와
+`/local-rag/`, `/local-only/` 경로를 사용한다. 기존 배포 명령으로 비교 이미지를 root 앱에 배포하지 않는다.
+
+### Foundry 모델과 비용
+
+```bash
+# 이미 존재하는 배포의 모델·템플릿이 다르면 덮어쓰지 않고 오류로 종료한다.
+# 새 배포 생성은 유료 A100 컴퓨트를 만들 수 있다.
+uv run python -m silvercare.deploy_comparison models
+uv run python -m silvercare.deploy_comparison model-status
+```
+
+Foundry의 **Models → Deployments → Managed-compute**에서 확인한다.
+Serverless 목록에 안 보이는 것은 배포 부재를 의미하지 않는다.
+관리 API는 Cognitive Services 계정의 `managedComputeDeployments`,
+`2026-03-15-preview`를 사용한다. 모델 URI는 버전 고정,
+관리 API가 요구하는 deployment template URI는 `labels/latest` 형식이다.
+LLM과 임베딩은 각각 A100 80GB 1개를 사용하는 시간 과금 리소스다.
+사용하지 않는 비교 환경은 앱뿐 아니라 관리형 모델 컴퓨트도 비용 관점에서 점검한다.
+공유 Foundry의 기존 GPT·임베딩·Speech 리소스를 임의로 삭제하거나 변경하지 않는다.
+
+생성은 native `/managed-deployments/{name}/v1/chat/completions`를 사용한다.
+통합 `/openai/v1/chat/completions`는 비사고 모드용 `chat_template_kwargs`를 거절한다.
+임베딩도 native `v1/embeddings`를 사용하며 gateway가 1024차원·순서·유한값·토큰 합계를 검증한다.
+인증은 Workload Identity이며 Azure API 키를 새로 만들지 않는다.
+gateway의 `/health`는 프로세스 상태이지 관리형 모델의 실제 준비 완료 증거가 아니다.
+`Succeeded`와 실제 생성·임베딩 호출을 모두 확인해야 한다.
+
+### AKS와 이미지
+
+비교 노드 `localmem`은 `Standard_D8ds_v5` 1개(8 vCPU / 32GiB),
+label `workload=local-ai`, taint `workload=local-ai:NoSchedule`다.
+기존 system 노드 2개는 유지한다. OpenSearch 데이터와 reranker cache는 각각 8Gi PVC다.
+reranker는 requests 16Gi / limits 24Gi, OpenSearch는 heap 1Gi / limits 4Gi다.
+CPU-bound 재정렬은 requests 2 / limits 6 vCPU와 4개 runtime worker를 사용한다.
+재정렬은 HTTP당 최대 64개 후보를 받고, 두 동시 대화의 병렬 근거 검색을 위한
+256개 pair permit을 둔다. 실제 추론 batch token 한도는 8192로 별도 제한한다.
+재정렬 readiness는 warm-up 뒤 열리는 `/info`를 사용한다.
+추론을 직접 수행하는 `/health`를 반복 호출해 대기열이 긴 정상 요청 중 Service에서 제외하지 않는다.
+전체 문맥 warm-up의 OOM을 피하기 위한 서버 설정이며 휴대폰 메모리 요구량 측정치가 아니다.
+검색·재정렬은 Recreate 방식으로 업데이트해 단일 PVC·큰 warm-up 메모리의 중복 사용을 피한다.
+
+```bash
+az acr build --registry silvercare2a5aalbg7ugfc \
+  --image silvercare:COMPARISON_TAG --file Dockerfile --no-logs .
+uv run python -m silvercare.deploy_comparison deploy \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare:COMPARISON_TAG \
+  --foundry-endpoint https://ai-foundry-m098047.services.ai.azure.com
+```
+
+이미지는 임베딩 tokenizer도 원본 revision과 SHA256으로 검증해 포함한다.
+로컬 gateway 실행은 같은 tokenizer를 준비하고 `FOUNDRY_EMBEDDING_TOKENIZER_PATH`를 지정한다.
+`FOUNDRY_ENDPOINT`, 두 deployment 이름과 token scope도 설정해야 한다.
+리소스 생성 명령은 모델 가중치를 AKS에 설치하지 않는다.
+기존 Speech 연결 설정과 질병관리청 Secret만 필요한 비교 앱에 연결한다.
+모델 단독 앱에는 KDCA·검색·임베딩 설정을 연결하지 않는다.
+
+### 문서 발행과 공개 순서
+
+클러스터 내부의 임시 indexer에서 준비된 JSONL 두 개만 전달한 후 실행한다.
+아래 파일 경로는 indexer에 복사한 위치를 뜻하며 원천 archive나 holdout은 전달하지 않는다.
+
+```bash
+python -m silvercare.offline_ingest \
+  --endpoint http://local-search:9200 \
+  --embedding-endpoint http://foundry-gateway:8080 \
+  --knowledge /tmp/data/processed/expanded/knowledge.jsonl \
+  --cases /tmp/data/processed/expanded/cases.jsonl \
+  --knowledge-index local-knowledge-v1 --case-index local-cases-v1 \
+  --dimensions 1024 --batch-size 32 \
+  --embedding-model Qwen/Qwen3-Embedding-0.6B \
+  --embedding-revision azure-huggingface/version-2 \
+  --output /tmp/ingest-report.json
+```
+
+발행기는 기존 인덱스를 덮어쓰지 않는다. 실패 시 부분 인덱스가 남으므로 새 이름으로 재시도하고,
+검증된 인덱스 이름을 비교 ConfigMap과 맞춘다. 보고서에는 source hash·수량·모델 정보를 남기며
+성공 수량은 지식 6,562 / 사례 6,762여야 한다. 기존 Azure release 파일은 변경하지 않는다.
+기관 전화번호는 검증한 노령층 가이드의 발행기관 표시 유선번호만 보존한다.
+본문·분할·벡터·bulk 응답·refresh·최종 count 검증이 실패하면 성공 보고서를 쓰지 않는다.
+
+두 앱의 실제 추론, hybrid 검색·출처, 모델 단독의 빈 출처·건강정보,
+Speech와 URL 접두사 분리를 확인한 뒤에만 다음 명령으로 경로를 공개한다.
+
+```bash
+uv run python -m silvercare.deploy_comparison routes
+```
+
+Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge.json`에 백업한다.
+기존 root reverse proxy는 보존하며 비교 API/static만 각 서비스로 전달한다.
+클라이언트 IP와 비교용 660초 upstream timeout을 별도로 전달한다.
+경로가 이미 존재하면 재실행으로 덮어쓰지 않는다. 이후 앱 업데이트는 `deploy`만 사용한다.
+앱과 gateway는 긴 비교 요청을 배포 중 잘라 버리지 않도록 종료 유예 660초를 둔다.
+인덱스 보고서와 비교 배포 상태는 별도 운영 파일로 보관하고 임시 indexer는 삭제한다.
+초기 단일 질문 smoke에서 모델 단독은 약 6.6초, CPU 재정렬을 포함한 RAG는
+복지 문의 약 86초, 낙상 문의 약 188초였다.
+이는 특정 질문·서버 설정의 단발 측정이며 일반 성능·의학 정확도·휴대폰 속도를 나타내지 않는다.
+화면에 RAG의 수 분 대기 가능성을 알리며 요청 취소와 600초 비교용 제한을 유지한다.
 
 ## 2. 로컬 실행
 

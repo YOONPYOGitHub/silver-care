@@ -1,6 +1,7 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const APP_BASE_PATH = document.documentElement.getAttribute("data-base-path") || "";
 const state = {
   history: [], busy: false, config: null, mode: "text", chat: null,
   audioURL: null, speaking: false, audioGeneration: 0, audioRequest: null,
@@ -49,12 +50,12 @@ function showError(message) {
 async function api(path, options = {}) {
   const controller = new AbortController();
   const abort = () => controller.abort();
-  const timeout = setTimeout(abort, 120000);
+  const timeout = setTimeout(abort, state.config?.request_timeout_ms ?? 120000);
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) controller.abort();
   let response;
   try {
-    response = await fetch(path, {
+    response = await fetch(APP_BASE_PATH + path, {
       credentials: "same-origin", ...options, signal: controller.signal,
     });
   } catch (error) {
@@ -206,7 +207,7 @@ function addMessage(role, text, result = null) {
   article.className = `message ${role}${result?.mode === "emergency" ? " emergency" : ""}`;
   if (role === "assistant") {
     const avatar = document.createElement("img");
-    avatar.src = "/static/mark.svg";
+    avatar.src = APP_BASE_PATH + "/static/mark.svg";
     avatar.alt = "";
     avatar.className = "avatar";
     article.append(avatar);
@@ -1072,6 +1073,14 @@ async function initialize() {
   try {
     state.config = await (await api("/api/config")).json();
     $("status").lastChild.textContent = state.config.search_enabled ? "상담 준비 완료" : "일반 대화 모드";
+    if (state.config.service_variant && state.config.service_variant !== "azure") {
+      const rag = state.config.service_variant === "local-rag";
+      $("status").lastChild.textContent = rag ? "소형 모델·RAG" : "소형 모델 단독";
+      $("variant-notice").hidden = false;
+      $("variant-notice").textContent = rag
+        ? "비교 실험 · Azure에 호스팅한 소형 모델과 자체 자료 검색을 사용해요. 공식 건강정보 API와 음성은 유지하며, 자료 재정렬에 수 분이 걸릴 수 있어요."
+        : "비교 실험 · Azure에 호스팅한 같은 소형 모델이 검색 없이 답해요. 모델 지식 기반이며 음성은 유지해요.";
+    }
     updateVoiceControls();
     if (!voiceAvailable()) {
       $("mode-description").textContent = "이 환경에서는 음성 대화를 사용할 수 없어요. 글로 대화해 주세요.";
