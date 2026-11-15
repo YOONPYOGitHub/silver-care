@@ -402,6 +402,8 @@ async def test_medical_reply_adds_one_compact_display_notice_and_keeps_raw_api_g
         assert len(result.display_notice) < len(result.notice) + len(result.medical_caution)
     finally:
         await service.close()
+
+
 async def test_query_normalization_content_filter_is_not_reported_as_search_outage():
     service = make_services(
         lambda _: httpx.Response(
