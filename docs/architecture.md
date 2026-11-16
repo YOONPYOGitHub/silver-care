@@ -31,15 +31,14 @@ AKS LoadBalancer → Caddy → FastAPI
 
 ```text
 같은 Caddy HTTPS 호스트
- ├─ /             → silvercare       → 기존 GPT·Azure AI Search
- ├─ /local-rag/   → silvercare-local → Foundry gateway → Qwen 생성·임베딩
+ ├─ /             → azurecpu → 전용 GPT·임베딩·Azure AI Search·Speech
+ ├─ /local-rag/   → localmem → 전용 Foundry gateway → 전용 Qwen 생성·임베딩
  │                                   ├─ OpenSearch BM25/HNSW → RRF → BGE 재정렬
  │                                   └─ 질병관리청 실행 API
- ├─ /local-only/  → silvercare-local → 같은 gateway·Qwen 생성만 사용
+ ├─ /local-only/  → onlycpu → 전용 gateway·Qwen 생성·Speech
  │                                   검색·사례·임베딩·질병관리청 조회 없음
- └─ /qwen-azure-rag/ → 같은 gateway·Qwen 생성·검색어 확장
-                      + 기존 Azure 임베딩·AI Search·semantic 재정렬·질병관리청 API
-각 앱 → 기존 Azure Speech
+ └─ /qwen-azure-rag/ → qwazcpu → 전용 gateway·기존 Qwen 생성·검색어 확장
+                      + 기존 Azure 임베딩·AI Search·semantic 재정렬·Speech·질병관리청 API
 ```
 
 `azure`, `local-rag`, `local-only`, `qwen-azure-rag`는 코드 복사본이 아닌 설정 프로필이다.
@@ -51,7 +50,11 @@ AKS LoadBalancer → Caddy → FastAPI
 `local-*`는 비교 프로필의 식별자이며 실제 오프라인·휴대폰 실행을 뜻하지 않는다.
 생성·임베딩은 Foundry 호스팅, 재정렬과 검색은 AKS 실행이다.
 `qwen-azure-rag`는 검색·재정렬도 Azure AI Search를 사용하므로 실제 오프라인 RAG가 아니다.
-같은 관리 ID로 기존 인덱스를 읽으며 baseline 앱·인덱스·임베딩을 갱신하지 않는다.
+서비스별 관리 ID는 자기 계정의 추론·Speech와 자기 Search의 문서 읽기만 허용한다.
+NetworkPolicy는 같은 프로필 내부 통신과 공통 Caddy의 앱 접근, DNS·공개 HTTP(S)만 허용한다.
+다른 프로필의 내부 gateway는 접근할 수 없고, Azure 자원은 별도 RBAC로 교차 접근을 차단한다.
+검색 스키마·문서 ID·본문·캐시된 512차원 벡터를 검증해 1번 전용 Search에 복제했으며,
+4번의 인덱스·모델 배포·할당량은 변경하지 않았다. 새 임베딩 생성은 없었다.
 클라우드 모델 정밀도와 휴대폰 양자화 모델, 서버와 휴대폰의 실행 자원은 동일하지 않다.
 
 평가용 추적은 서버 기능 플래그와 별도 토큰으로 승인된 `/api/chat` 요청에서만 응답에 추가한다.
@@ -71,23 +74,28 @@ AKS LoadBalancer → Caddy → FastAPI
 | 역할 | 리소스·설정 | 소유 범위 |
 | --- | --- | --- |
 | 서비스 리소스 그룹 | `rg-silver-care`, Korea Central | AKS·ACR·검색·관리 ID |
-| AKS | `aks-silvercare`, `Standard_D2ds_v5` 운영 노드 2개 | 앱·Caddy·공개 Service. 기본 템플릿은 1개 |
+| AKS 기반 시설 | `aks-silvercare`, `system` D2ds_v5 2개 | 공통 Caddy·DNS·클러스터 기반 시설 |
 | 컨테이너 레지스트리 | `silvercare2a5aalbg7ugfc` | ACR Basic |
-| 앱 관리 ID | `silvercare-app` | AKS Workload Identity |
-| 운영 검색 | `silvercare-rag-2a5aalbg7ugfc` | Basic, replica 1 / partition 1, semantic Standard |
-| 생성 모델 | `RG-AI/ai-foundry-m098047`, `gpt-6.1-terra` | 공유 Foundry 계정, GlobalStandard |
-| 임베딩 | `silvercare-embedding`, `text-embedding-3-small`, 512차원 | 같은 Foundry 계정 |
-| 음성 | Foundry 계정의 Speech endpoint, `ko-KR-SunHiNeural` | 선택형 STT/TTS |
+| 앱 관리 ID | `silvercare-v1` ~ `silvercare-v4` | 서비스별 Workload Identity·별도 ServiceAccount |
+| 1번 | `azurecpu` D2ds_v5 1개, `ondam-v1-e4b60458` | GPT-6.1-Terra·512차원 임베딩·Speech |
+| 1번 검색 | `silvercare-v1-e4b60458` | Basic, replica 1 / partition 1, semantic Standard |
+| 2번 | `localmem` D8ds_v5 1개, `ondam-v2-e4b60458` | Qwen 생성 A100 1개 + 임베딩 A100 1개·Speech |
+| 3번 | `onlycpu` D2ds_v5 1개, `ondam-v3-e4b60458` | Qwen 생성 A100 1개·Speech, 검색·임베딩 없음 |
+| 4번 | `qwazcpu` D2ds_v5 1개, `ai-foundry-m098047` | 기존 Qwen 생성 A100 1개·512차원 임베딩·Speech |
+| 4번 검색 | `silvercare-rag-2a5aalbg7ugfc` | 기존 Basic·semantic Standard, 인덱스 유지 |
 | HTTPS | Caddy·공개 IP·영속 인증서 디스크 | LoadBalancer의 80/443 |
-| 비교 생성 | `ondam-qwen-4b`, Qwen3.5-4B | Foundry GlobalManagedCompute, A100 80GB 1개 |
-| 비교 임베딩 | `ondam-qwen-embedding`, Qwen3-Embedding-0.6B, 1024차원 | 별도 GlobalManagedCompute, A100 80GB 1개 |
+| 비교 생성 | 각 계정의 `ondam-qwen-4b`, Qwen3.5-4B version 3 | 독립 GlobalManagedCompute, 각 A100 80GB 1개 |
+| 비교 임베딩 | 2번 계정의 `ondam-qwen-embedding`, Qwen3-Embedding-0.6B version 2 | GlobalManagedCompute, A100 80GB 1개 |
 | 비교 검색·재정렬 | OpenSearch 3.3.2, BGE-reranker-v2-m3 FP32 ONNX | 별도 `silvercare-local` namespace, ClusterIP |
-| 비교 AKS 노드 | `localmem`, Standard_D8ds_v5 1개, 8 vCPU / 32GiB | `workload=local-ai` label·전용 taint, 검색·재정렬·비교 앱 |
+| 2번 검색·재정렬 노드 | `localmem`, Standard_D8ds_v5 1개, 8 vCPU / 32GiB | 다른 서비스는 배치하지 않음 |
 
 공유 Foundry 계정의 전역 정책·다른 프로젝트 학습을 앱 배포에서 수정하지 않는다.
 `GlobalStandard`는 계정 위치와 추론 처리 위치가 같다고 보장하지 않는다.
 비교 모델은 Serverless가 아닌 **Managed-compute 탭**에서 확인한다.
-두 A100 배포는 시간 단위 과금이며 휴대폰급 자원 제한을 적용한 측정 환경이 아니다.
+네 A100 배포는 시간 단위 과금이며 휴대폰급 자원 제한을 적용한 측정 환경이 아니다.
+전용 노드는 label·taint·nodeSelector로 분리한다. HTTPS 진입점·클러스터 기반 시설·ACR,
+질병관리청 외부 API·서비스키·상위 구독/공급자 한도는 공통이다.
+별도 모델 배포·할당량을 Azure 공급자 내부의 전용 물리 서버 보장으로 해석하지 않는다.
 재정렬의 8192-token 문맥과 비절단 처리를 유지하기 위해 32GiB 노드를 사용한다.
 16GiB 노드에서 10GiB 컨테이너 한도로 실행한 전체 문맥 warm-up은 OOM 종료됐다.
 
@@ -95,9 +103,11 @@ AKS LoadBalancer → Caddy → FastAPI
 
 - [main.bicep](../infra/main.bicep): AKS·ACR·관리 ID와 **Free 검색**을 만드는 기본 템플릿이다.
 - [search-rag.bicep](../infra/search-rag.bicep): 운영 corpus 용량에 사용하는 **Basic 검색** 템플릿이다.
-- [deploy.py](../silvercare/deploy.py): Kubernetes 객체 생성·역할 연결·빌드·rollout·HTTPS 검증을 수행한다.
+- [service_isolation.py](../silvercare/service_isolation.py): 전용 연결·canary·이전·경계 정책·이미지 업데이트를 관리한다.
+- [deploy.py](../silvercare/deploy.py): 초기 단일 서비스 배포 도구다. 격리 marker가 있으면 기존 공유 배포는 차단한다.
 - `data/processed/expanded/release.json`: 사용할 검색 endpoint·인덱스·검색 기능 설정이다.
-- `.runtime/deployment.json`: 배포 URL·이미지·클러스터·검색 endpoint의 로컬 상태다.
+- `.runtime/service-isolation-state.json`: 전용 연결·기존 설정·이미지·canary 검증의 현재 운영 상태다.
+- `.runtime/deployment.json`: 격리 이전 단일 서비스 배포 기록이며 현재 연결의 기준으로 사용하지 않는다.
 
 기본 템플릿의 Free 검색을 운영 검색으로 오해하지 않는다.
 운영 인덱스는 `silvercare-knowledge-v9`, `silvercare-cases-v8`이며 앱은 릴리스 설정으로 선택한다.
@@ -116,7 +126,7 @@ AKS LoadBalancer → Caddy → FastAPI
 | --- | --- |
 | [app.py](../silvercare/app.py) | FastAPI·수명주기·라우트·출처 검증·요청 제한·오류 응답 |
 | [azure.py](../silvercare/azure.py) | 현재 시스템 지침·검색어 확장·질문 임베딩·검색·API 근거 결합·생성·인용 검증·음성 |
-| [local_services.py](../silvercare/local_services.py) | 공유 Qwen 생성, Azure Search RAG·OSS RAG·모델 단독 프로필 |
+| [local_services.py](../silvercare/local_services.py) | 공통 Qwen 호출 코드, 전용 배포를 사용하는 Azure Search RAG·OSS RAG·모델 단독 프로필 |
 | [foundry_gateway.py](../silvercare/foundry_gateway.py) | Workload Identity로 관리형 Qwen 추론, 응답 정규화·정확한 임베딩 토큰 한도 검증 |
 | [offline_search.py](../silvercare/offline_search.py) | OpenSearch 필터·BM25/HNSW·RRF·재정렬·부모 문맥 조회 |
 | [cpu_reranker.py](../silvercare/cpu_reranker.py) | 고정 BGE CPU 실행·길이순 비절단 batch·중복 score cache·모델 artifact 검증 |

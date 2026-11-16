@@ -99,6 +99,31 @@ def kubectl(*args: str, input_text: str | None = None) -> str:
     return result.stdout
 
 
+def dedicated_runtime_active() -> bool:
+    if not (RUNTIME / "kubeconfig").exists():
+        return False
+    marker = kubectl(
+        "-n",
+        BASELINE_NAMESPACE,
+        "get",
+        "configmap",
+        "silvercare-runtime-isolation",
+        "--ignore-not-found",
+        "-o",
+        "json",
+    )
+    return bool(marker.strip())
+
+
+def reject_shared_deployment() -> None:
+    if dedicated_runtime_active():
+        raise ValueError(
+            "Dedicated runtime migration is active. Shared deployment commands are blocked; "
+            "use python -m silvercare.service_isolation deploy-image --profile ... --image ... "
+            "to preserve dedicated nodes, identities, models, Search and Speech."
+        )
+
+
 def obj(kind: str, name: str, **body: Any) -> dict[str, Any]:
     versions = {"Deployment": "apps/v1", "Job": "batch/v1"}
     return {
@@ -583,6 +608,8 @@ def main() -> None:
     parser.add_argument("--foundry-endpoint")
     args = parser.parse_args()
     try:
+        if args.command not in {"routes", "model-status"}:
+            reject_shared_deployment()
         if args.command in {"deploy", "deploy-qwen-azure"}:
             if not args.image or (args.command == "deploy" and not args.foundry_endpoint):
                 raise ValueError("Image and, for full deployment, Foundry endpoint are required")
@@ -612,6 +639,10 @@ def main() -> None:
             apply(cpu_reranker_resources(args.image))
         elif args.command == "routes":
             add_routes()
+        elif args.command == "model-status" and dedicated_runtime_active():
+            from silvercare.service_isolation import status
+
+            status()
         else:
             manage_models(create=args.command == "models")
     except (ValueError, RuntimeError, OSError) as error:

@@ -25,8 +25,11 @@ Azure 기준 서비스의 배포 이미지는 `azure-baseline-20261116-3b2c666`�
 
 **비교 버전도 실제로는 온라인 Azure 서비스다.** 소형 생성·임베딩 모델은 Foundry
 Managed-compute에 각각 A100 80GB 1개로 호스팅하며, OpenSearch와 BGE 재정렬만 AKS에서 실행한다.
-Qwen + Azure RAG는 같은 Qwen 생성 배포와 기존 Azure 검색 인덱스를 재사용하며
-Qwen 임베딩·OpenSearch·CPU BGE를 호출하지 않는다. 새 모델 컴퓨트·노드·인덱스는 만들지 않는다.
+네 서비스는 전용 AKS node pool·관리 ID·Foundry 계정 및 모델 배포·Speech를 사용한다.
+Azure RAG 두 서비스의 Search도 별도다. 4번의 기존 모델·검색 자원은 유지하고
+다른 버전을 별도 자원으로 이동했다. Qwen + Azure RAG는 Qwen 임베딩·OpenSearch·CPU BGE를 호출하지 않는다.
+공통 HTTPS 진입점·AKS 기반 시설·ACR·외부 질병관리청 API 및 구독 전체 한도는 예외다.
+이는 서비스 사이의 실행 자원 격리이지 Azure 공급자 수준의 물리적 완전 격리 보장은 아니다.
 이 배포는 모델 크기·답변·검색 효과를 비교하기 위한 것으로, 보급형 휴대폰의 속도·메모리·배터리나
 양자화 모델의 품질을 입증하지 않는다. Managed-compute는 토큰 사용량이 아닌
 컴퓨트 가동 시간 기준의 유료 리소스이며, 앱에 요청이 없어도 비용이 발생할 수 있다.
@@ -44,6 +47,7 @@ Qwen 임베딩·OpenSearch·CPU BGE를 호출하지 않는다. 새 모델 컴퓨
 | [실행·수집·배포·검증](docs/operations.md) | 환경변수, 명령, 인덱스 발행과 릴리스, 테스트 |
 | [원본 데이터 구조·검증](docs/data-analysis.md) | 실제 수집 파일의 스키마·통계·출처 한계 |
 | [독립 의료 평가 도구](evaluation/README.md) | 별도 실행 환경, 근거 기반 노인 의료 문항, Astra 채점·교정·보고서 |
+| [네 서비스 비교·격리 후 지연](docs/comparison-results-2026-11-16.md) | 전용 자원 구성, cold/반복 질문 지연, 개선 제안, 완료·미완료 품질 평가 구분 |
 
 ## 답변에 사용하는 자료
 

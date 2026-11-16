@@ -433,6 +433,9 @@ def verify_public_url(url: str) -> None:
 
 
 def deploy(skip_infra: bool, skip_build: bool, tag: str) -> None:
+    from silvercare.deploy_comparison import reject_shared_deployment
+
+    reject_shared_deployment()
     RUNTIME.mkdir(exist_ok=True, mode=0o700)
     RUNTIME.chmod(0o700)
     if not skip_infra:

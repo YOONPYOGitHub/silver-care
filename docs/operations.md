@@ -51,10 +51,7 @@ POST는 실제 404로 응답해 이 API에서 사용하지 않는다.
 ### Foundry 모델과 비용
 
 ```bash
-# 이미 존재하는 배포의 모델·템플릿이 다르면 덮어쓰지 않고 오류로 종료한다.
-# 새 배포 생성은 유료 A100 컴퓨트를 만들 수 있다.
-uv run python -m silvercare.deploy_comparison models
-uv run python -m silvercare.deploy_comparison model-status
+uv run python -m silvercare.service_isolation status
 ```
 
 Foundry의 **Models → Deployments → Managed-compute**에서 확인한다.
@@ -62,9 +59,12 @@ Serverless 목록에 안 보이는 것은 배포 부재를 의미하지 않는�
 관리 API는 Cognitive Services 계정의 `managedComputeDeployments`,
 `2026-03-15-preview`를 사용한다. 모델 URI는 버전 고정,
 관리 API가 요구하는 deployment template URI는 `labels/latest` 형식이다.
-LLM과 임베딩은 각각 A100 80GB 1개를 사용하는 시간 과금 리소스다.
+2·3·4번의 Qwen 생성은 계정별 A100 80GB 1개씩, 2번의 Qwen 임베딩은 추가 A100 1개를 사용한다.
+1번 GPT·OpenAI 임베딩은 별도 계정의 GlobalStandard 배포다.
 사용하지 않는 비교 환경은 앱뿐 아니라 관리형 모델 컴퓨트도 비용 관점에서 점검한다.
-공유 Foundry의 기존 GPT·임베딩·Speech 리소스를 임의로 삭제하거나 변경하지 않는다.
+4번의 기존 계정·Qwen 생성·Azure 임베딩·Search는 유지한다.
+사용하지 않는 이전 공용 Qwen 임베딩 배포와 공용 gateway는 제거했다.
+원래 Foundry의 다른 프로젝트용 GPT 배포는 삭제하거나 할당량을 줄이지 않았다.
 
 생성은 native `/managed-deployments/{name}/v1/chat/completions`를 사용한다.
 통합 `/openai/v1/chat/completions`는 비사고 모드용 `chat_template_kwargs`를 거절한다.
@@ -75,7 +75,9 @@ gateway의 `/health`는 프로세스 상태이지 관리형 모델의 실제 준
 
 ### AKS와 이미지
 
-비교 노드 `localmem`은 `Standard_D8ds_v5` 1개(8 vCPU / 32GiB),
+서비스별 자원과 관리 ID는 [리소스 표](architecture.md#2-리소스)를 따른다.
+`azurecpu`, `onlycpu`, `qwazcpu`는 각각 D2ds_v5 1개이며 앱·gateway를 해당 서비스에만 배치한다.
+2번 전용 노드 `localmem`은 `Standard_D8ds_v5` 1개(8 vCPU / 32GiB),
 label `workload=local-ai`, taint `workload=local-ai:NoSchedule`다.
 기존 system 노드 2개는 유지한다. OpenSearch 데이터는 8Gi PVC다.
 기존 TEI cache 8Gi PVC는 롤백용으로 보존하며 최적화 runtime은 고정 이미지의 모델을 읽는다.
@@ -92,16 +94,18 @@ readiness `/info`는 추론 대기열 뒤에 다시 모델 계산을 추가하�
 ```bash
 az acr build --registry silvercare2a5aalbg7ugfc \
   --image silvercare:COMPARISON_TAG --file Dockerfile --no-logs .
-uv run python -m silvercare.deploy_comparison deploy \
-  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare:COMPARISON_TAG \
-  --foundry-endpoint https://ai-foundry-m098047.services.ai.azure.com
+uv run python -m silvercare.service_isolation deploy-image \
+  --profile qwen-azure-rag --component app \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:VERIFIED_DIGEST
 ```
 
 이미지는 임베딩 tokenizer도 원본 revision과 SHA256으로 검증해 포함한다.
 로컬 gateway 실행은 같은 tokenizer를 준비하고 `FOUNDRY_EMBEDDING_TOKENIZER_PATH`를 지정한다.
-`FOUNDRY_ENDPOINT`, 두 deployment 이름과 token scope도 설정해야 한다.
+`FOUNDRY_ENDPOINT`, `FOUNDRY_LLM_DEPLOYMENT`와 token scope를 설정한다.
+`FOUNDRY_EMBEDDING_DEPLOYMENT`는 2번 gateway에만 설정한다.
+임베딩이 없는 3·4번 gateway는 tokenizer를 읽지 않고 `/embed` 요청을 명시적으로 404 처리한다.
 생성·임베딩 모델 가중치는 AKS에 설치하지 않는다. 재정렬 모델만 CPU 전용 이미지에 포함한다.
-기존 Speech 연결 설정과 질병관리청 Secret만 필요한 비교 앱에 연결한다.
+각 서비스는 전용 Speech 연결을 사용한다. 질병관리청 서비스키는 외부 API의 공통 예외다.
 모델 단독 앱에는 KDCA·검색·임베딩 설정을 연결하지 않는다.
 
 CPU 재정렬 이미지는 기본 앱 이미지와 다른 Docker target이다. 기본 target은 계속 앱이다.
@@ -109,8 +113,9 @@ CPU 재정렬 이미지는 기본 앱 이미지와 다른 Docker target이다. �
 ```bash
 az acr build --registry silvercare2a5aalbg7ugfc \
   --image silvercare:CPU_RERANKER_TAG --file Dockerfile --target cpu-reranker --no-logs .
-uv run python -m silvercare.deploy_comparison deploy-reranker \
-  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare:CPU_RERANKER_TAG
+uv run python -m silvercare.service_isolation deploy-image \
+  --profile local-rag --component local-reranker \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:VERIFIED_DIGEST
 uv run --extra reranker pytest -q
 ```
 
@@ -121,29 +126,36 @@ MRR이 0.637681→0.626812로 하락해 사전 기준(최대 하락 0.01)을 통
 이 검사는 각 질문의 동결된 RRF 상위 12개 후보 안에서의 비교이며 전체 임상 품질 인증이 아니다.
 TEI 롤백 manifest는 `.runtime/reranker-tei-rollback.json`에 별도로 보존한다.
 
-### Qwen + Azure Search만 추가·업데이트
+### 전용 연결 유지와 이미지 업데이트
 
 ```bash
-uv run python -m silvercare.deploy_comparison deploy-qwen-azure \
-  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare:COMPARISON_TAG
+uv run python -m silvercare.service_isolation deploy-image \
+  --profile qwen-azure-rag --component app \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:VERIFIED_DIGEST
 ```
 
-이 명령은 기존 Foundry gateway·관리 ID·Azure Search를 재사용한다.
-새 앱의 ConfigMap·Deployment·Service만 만들며 기존 세 앱·모델·검색 PVC 이미지는 바꾸지 않는다.
-전체 비교 환경을 배포하는 `deploy`는 세 비교 앱을 모두 포함한다.
-기존 baseline ConfigMap의 Azure 검색·임베딩·Speech 설정을 명시적으로 복사하고,
-생성 모델 배포명·키·임의 환경변수는 복사하지 않는다.
-질병관리청 키는 기존 Secret 참조로 연결한다.
-새 인덱스 생성·재임베딩·새 GPU/노드 프로비저닝은 수행하지 않는다.
-이 프로필의 readiness는 gateway 프로세스와 기존 Azure 인덱스 두 개의 문서 수를 확인한다.
+이 명령은 선택한 서비스의 이미지 하나만 바꾸며 node·관리 ID·연결 설정의 drift를 거부한다.
+프로필은 `azure`, `local-rag`, `local-only`, `qwen-azure-rag`다.
+`--component gateway`는 해당 프로필의 gateway만, `local-reranker`·`local-search`는 2번만 선택할 수 있다.
+1번 기준 이미지도 변경 승인을 받은 경우에만 업데이트한다.
+현재 기준 이미지와 프론트엔드는 자원 분리 과정에서 바꾸지 않았다.
+
+클러스터의 `silvercare/silvercare-runtime-isolation` marker는 기존 단일/공유 배포 명령을 차단한다.
+`deploy.py`, `deploy_comparison deploy`, `deploy-qwen-azure`, `deploy-reranker`, `models`로
+공유 연결을 재생성하지 않는다. 전용 상태 파일은 0600 권한으로 보관·백업하며 Git에 넣지 않는다.
+다른 운영 환경에서 이 파일 없이 snapshot을 새로 만들어 현재 연결을 덮어쓰지 않는다.
+이전 공용 관리 ID의 두 AKS federated credential은 폐기했다.
+NetworkPolicy는 다른 프로필의 내부 API·gateway·검색·재정렬 연결을 차단하고,
+Azure RBAC는 다른 계정의 추론·검색 접근을 거부한다.
+동일 호스트의 HTTPS 진입점·클러스터 기반 시설·ACR·외부 질병관리청 API와 상위 한도는 공통 예외다.
 
 ### 서비스와 평가 부하 분리
 
-CPU 재정렬의 긴 연산과 공개 API의 동시 처리 슬롯을 평가 작업이 점유하지 않도록,
-전체 비교는 별도의 임시 `evalcpu` User node pool에서 같은 이미지·모델·데이터·설정의
-격리 복제본으로 순차 실행한다. 검색 인덱스와 Foundry 배포는 읽기·추론용으로 재사용한다.
-평가용 재정렬 서버와 공개 서비스의 재정렬 서버는 별도 process·Service·node를 사용한다.
-임시 노드는 평가 결과를 보관한 뒤 삭제하며 추가 가동 시간 비용이 발생한다.
+전체 비교 평가 작업은 중지·보관했으며 임시 `evalcpu` pool은 삭제했다.
+기존 평가 자료는 자원 격리 전 품질 snapshot으로 보존하며 격리 후 URL 지연과 섞지 않는다.
+향후 평가 복제본은 버전별 전용 모델·검색·관리 ID만 사용해야 한다.
+4번을 사용 중일 때 4번의 모델·검색에 전체 평가 부하를 다시 보내지 않는다.
+공개 재정렬과 다른 process·node에서 평가하며, 별도 CPU 노드는 사용 후 삭제한다.
 
 평가용 질문은 합성 데이터만 사용한다. 결과는 요청마다 checkpoint를 남기고 원시 결과를 보존한다.
 공개 URL의 실제 카드 클릭 검증과 격리 환경의 전체 성능·품질 평가는 구분해 기록한다.
@@ -157,7 +169,7 @@ CPU 재정렬의 긴 연산과 공개 API의 동시 처리 슬롯을 평가 작�
 ```bash
 python -m silvercare.offline_ingest \
   --endpoint http://local-search:9200 \
-  --embedding-endpoint http://foundry-gateway:8080 \
+  --embedding-endpoint http://local-rag-foundry:8080 \
   --knowledge /tmp/data/processed/expanded/knowledge.jsonl \
   --cases /tmp/data/processed/expanded/cases.jsonl \
   --knowledge-index local-knowledge-v1 --case-index local-cases-v1 \
@@ -186,7 +198,7 @@ Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge
 기존 `/local-rag/`, `/local-only/` 경로가 있으면 그 블록과 root proxy를 보존하면서
 `/qwen-azure-rag/`만 추가하고 `.runtime/qwen-azure-baseline-edge.json`에 추가 전 설정을 보관한다.
 요청한 경로가 모두 존재하면 재실행으로 덮어쓰지 않는다.
-이후 앱 업데이트에는 `deploy` 또는 해당 앱 전용 `deploy-qwen-azure`를 사용한다.
+이후 앱 업데이트에는 전용 `service_isolation deploy-image`만 사용한다.
 앱과 gateway는 긴 비교 요청을 배포 중 잘라 버리지 않도록 종료 유예 660초를 둔다.
 인덱스 보고서와 비교 배포 상태는 별도 운영 파일로 보관하고 임시 indexer는 삭제한다.
 초기 단일 질문 smoke에서 모델 단독은 약 6.6초, CPU 재정렬을 포함한 RAG는

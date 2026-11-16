@@ -62,13 +62,15 @@ def create_gateway(
     tokenizer: Tokenizer | None = None,
 ) -> FastAPI:
     config = settings or FoundryGatewaySettings()
-    if not all((config.endpoint, config.llm_deployment, config.embedding_deployment)):
+    if not all((config.endpoint, config.llm_deployment)):
         raise ValueError("Foundry gateway endpoints/deployment names are required")
     http = client or httpx.AsyncClient(timeout=httpx.Timeout(config.timeout, connect=15))
     auth = credential or DefaultAzureCredential(exclude_interactive_browser_credential=True)
-    encoder = tokenizer or Tokenizer.from_file(config.embedding_tokenizer_path)
-    encoder.no_truncation()
-    encoder.no_padding()
+    encoder = None
+    if config.embedding_deployment:
+        encoder = tokenizer or Tokenizer.from_file(config.embedding_tokenizer_path)
+        encoder.no_truncation()
+        encoder.no_padding()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -131,6 +133,8 @@ def create_gateway(
 
     @app.post("/embed")
     async def embed(payload: dict[str, Any]) -> list[list[float]]:
+        if encoder is None:
+            raise HTTPException(404, "Embedding is disabled for this dedicated gateway.")
         inputs = payload.get("inputs")
         texts = [inputs] if isinstance(inputs, str) else inputs
         if (

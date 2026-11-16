@@ -88,6 +88,32 @@ def test_chat_uses_only_configured_foundry_deployment_with_entra_auth():
     assert len(calls) == 1
 
 
+def test_generation_only_gateway_never_loads_or_calls_embedding(monkeypatch):
+    def unexpected_tokenizer(*args):
+        pytest.fail("Generation-only gateway must not load an embedding tokenizer")
+
+    monkeypatch.setattr(Tokenizer, "from_file", unexpected_tokenizer)
+    credential = auth()
+    config = gateway_config().model_copy(update={"embedding_deployment": ""})
+    with TestClient(
+        gateway_factory(
+            config,
+            httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda _: httpx.Response(200, json={"ok": True}))
+            ),
+            credential,
+        )
+    ) as client:
+        assert client.get("/health").status_code == 200
+        assert (
+            client.post("/embed", json={"inputs": ["text"], "truncate": False}).status_code == 404
+        )
+        credential.get_token.assert_not_called()
+        result = client.post("/v1/chat/completions", json={"model": "qwen3.5-4b", "messages": []})
+        assert result.status_code == 200
+        assert credential.get_token.await_count == 1
+
+
 @pytest.mark.parametrize("kind", ["query", "document"])
 def test_embedding_preserves_document_text_and_adds_instruction_only_for_query(kind):
     def handler(request):
