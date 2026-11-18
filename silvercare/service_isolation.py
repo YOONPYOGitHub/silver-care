@@ -13,6 +13,7 @@ from silvercare.deploy import GROUP, LOCATION, RUNTIME, az_json, role
 from silvercare.deploy_comparison import (
     MANAGED_API_VERSION,
     MANAGED_MODELS,
+    QWEN_PUBLIC_PATH,
     apply,
     kubectl,
     managed_body,
@@ -475,6 +476,8 @@ def bindings(profile_name: str, profile: dict[str, Any]) -> dict[str, str]:
         config["LOCAL_LLM_ENDPOINT"] = f"http://{profile['app']}-foundry:8080"
         if profile_name == "local-rag":
             config["LOCAL_EMBEDDING_ENDPOINT"] = config["LOCAL_LLM_ENDPOINT"]
+    if profile_name == "qwen-azure-rag":
+        config["BASE_PATH"] = QWEN_PUBLIC_PATH
     return config
 
 
@@ -826,26 +829,24 @@ def deploy_image(profile_name: str, image: str, component: str) -> None:
         raise ValueError("Node bindings drifted; refusing image update")
     if component in {"app", "gateway"} and pod["serviceAccountName"] != profile["service_account"]:
         raise ValueError("Identity bindings drifted; refusing image update")
-    for source in pod["containers"][0].get("envFrom", []):
-        if "configMapRef" in source:
-            config = json.loads(
-                kubectl(
-                    "-n",
-                    profile["namespace"],
-                    "get",
-                    "configmap",
-                    source["configMapRef"]["name"],
-                    "-o",
-                    "json",
-                )
-            )["data"]
-            expected = (
-                bindings(profile_name, profile)
-                if component == "app"
-                else gateway_resources(profile_name, profile, image)[0]["data"]
-            )
-            if any(config.get(key) != value for key, value in expected.items()):
-                raise ValueError("Resource bindings drifted; refusing image update")
+    if component in {"app", "gateway"}:
+        config_name = name + ("-isolated-config" if component == "app" else "-config")
+        sources = pod["containers"][0].get("envFrom", [])
+        if len(sources) != 1 or sources[0].get("configMapRef", {}).get("name") != config_name:
+            raise ValueError("Configuration bindings drifted; refusing image update")
+        config = json.loads(
+            kubectl("-n", profile["namespace"], "get", "configmap", config_name, "-o", "json")
+        )["data"]
+        expected = (
+            bindings(profile_name, profile)
+            if component == "app"
+            else gateway_resources(profile_name, profile, image)[0]["data"]
+        )
+        if any(config.get(key) != value for key, value in expected.items()):
+            raise ValueError("Resource bindings drifted; refusing image update")
+        for variable in pod["containers"][0].get("env", []):
+            if variable["name"] in expected and variable.get("value") != expected[variable["name"]]:
+                raise ValueError("Environment bindings drifted; refusing image update")
     container_name = pod["containers"][0]["name"]
     kubectl(
         "-n",

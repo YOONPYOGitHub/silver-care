@@ -163,14 +163,17 @@ async def test_qwen_azure_readiness_checks_shared_gateway_and_existing_indexes(c
 
 
 def test_qwen_azure_factory_capabilities_and_prefix_are_independent():
-    with TestClient(create_app(azure_settings(base_path="/qwen-azure-rag"))) as client:
+    with TestClient(create_app(azure_settings(base_path="/qwen-rag"))) as client:
         assert isinstance(client.app.state.azure, QwenServices)
         assert not isinstance(client.app.state.azure, LocalServices)
         config = client.get("/api/config").json()
         assert config["service_variant"] == "qwen-azure-rag" and config["search_enabled"]
         html = client.get("/").text
-        assert 'src="/qwen-azure-rag/static/app.js"' in html
-        assert 'data-base-path="/qwen-azure-rag"' in html
+        assert 'src="/qwen-rag/static/app.js"' in html
+        assert 'data-base-path="/qwen-rag"' in html
+        assert 'href="/qwen-rag/"' in html
+        assert "/qwen-azure-rag/" not in html
+        assert client.get("/static/app.js").status_code == 200
 
 
 @pytest.mark.parametrize(

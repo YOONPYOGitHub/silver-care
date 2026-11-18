@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -41,6 +43,21 @@ def test_chunk_threshold_overlap_and_boundaries():
     assert [len(item) for item in pieces] == [1000, 1000, 740]
     with pytest.raises(ValueError):
         list(chunks(text, size=100, overlap=100))
+
+
+def test_chunk_splitting_always_advances_with_large_valid_overlap():
+    code = (
+        "import json;from silvercare.data import chunks;"
+        "print(json.dumps(list(chunks('a'*25+'\\n'+'b'*70,size=40,overlap=35))))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], check=True, capture_output=True, text=True, timeout=5
+    )
+    pieces = json.loads(result.stdout)
+    assert pieces and len(pieces) <= 20
+    assert all(20 <= len(piece) <= 40 for piece in pieces)
+    assert pieces[0].startswith("a" * 25)
+    assert pieces[-1].endswith("b" * 20)
 
 
 def test_prepare_extracts_only_explicit_text_and_deduplicates(tmp_path):

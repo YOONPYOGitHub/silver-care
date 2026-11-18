@@ -3,7 +3,9 @@ import pytest
 from silvercare.deploy import kubernetes_resources
 from silvercare.deploy_comparison import (
     MANAGED_MODELS,
+    QWEN_LEGACY_PATH,
     managed_body,
+    proxy_route_block,
     qwen_azure_resources,
     qwen_azure_route_config,
     resources,
@@ -66,7 +68,11 @@ def test_routes_keep_original_proxy_and_isolate_experimental_api_and_static_path
     assert result.count("reverse_proxy silvercare:8000") == 1
     assert "handle_path /local-rag/*" in result
     assert "handle_path /local-only/*" in result
-    assert "handle_path /qwen-azure-rag/*" in result
+    assert "handle_path /qwen-rag/*" in result
+    assert "qwen-azure-rag.silvercare-local.svc.cluster.local:8000" in result
+    assert "handle_path /qwen-azure-rag/*" not in result
+    assert "/qwen-azure-rag" not in result
+    assert "redir /qwen-rag /qwen-rag/ 308" in result
     assert "local-rag.silvercare-local.svc.cluster.local:8000" in result
     assert result.count("{") == result.count("}")
     assert "response_header_timeout 120s" in result
@@ -74,6 +80,9 @@ def test_routes_keep_original_proxy_and_isolate_experimental_api_and_static_path
     assert result.count("header_up X-Real-IP {remote_host}") == 4
     existing = result.replace(route_block("qwen-azure-rag"), "")
     assert qwen_azure_route_config(existing) == result
+    old_route = proxy_route_block("qwen-azure-rag", QWEN_LEGACY_PATH)
+    legacy = result.replace(route_block("qwen-azure-rag"), old_route)
+    assert qwen_azure_route_config(legacy) == result
     with pytest.raises(ValueError):
         qwen_azure_route_config(result)
     with pytest.raises(ValueError):
@@ -83,6 +92,29 @@ def test_routes_keep_original_proxy_and_isolate_experimental_api_and_static_path
 def test_unknown_edge_config_fails_instead_of_overwriting_existing_routes():
     with pytest.raises(ValueError):
         route_config("an unexpected baseline config")
+
+
+def test_unknown_legacy_qwen_route_is_not_silently_overwritten():
+    rows = kubernetes_resources(
+        "registry.test/baseline:1",
+        "client",
+        "tenant",
+        "example.test",
+        "https://search.test",
+        "/resource/speech",
+    )
+    original = next(
+        row["data"]["Caddyfile"]
+        for row in rows
+        if row["kind"] == "ConfigMap" and "Caddyfile" in row.get("data", {})
+    )
+    result = route_config(original)
+    legacy = result.replace(
+        route_block("qwen-azure-rag"),
+        proxy_route_block("qwen-azure-rag", QWEN_LEGACY_PATH).replace("660s", "600s"),
+    )
+    with pytest.raises(ValueError, match="Unexpected legacy Qwen"):
+        qwen_azure_route_config(legacy)
 
 
 def test_managed_model_specifications_pin_small_models_and_use_template_labels():
@@ -118,6 +150,7 @@ def test_fourth_app_reuses_baseline_search_without_replacing_existing_deployment
     assert config["AZURE_SPEECH_RESOURCE_ID"] == "shared-speech"
     assert config["EMBEDDING_DIMENSIONS"] == "512"
     assert config["SERVICE_VARIANT"] == "qwen-azure-rag"
+    assert config["BASE_PATH"] == "/qwen-rag"
     assert "AZURE_OPENAI_DEPLOYMENT" not in config and "KDCA_HEALTH_API_KEY" not in config
     assert not any(
         key.startswith(("LOCAL_SEARCH_", "LOCAL_EMBEDDING_", "LOCAL_RERANKER_")) for key in config

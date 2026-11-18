@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from silvercare import deploy
+from silvercare import deploy, deploy_comparison
 from silvercare.config import Settings
 from silvercare.deploy import command, kubernetes_resources, verify_public_url
 
@@ -164,6 +164,8 @@ def test_deployment_state_is_written_only_after_verified_readiness(tmp_path, mon
     state.write_text(json.dumps(previous))
     monkeypatch.setattr(deploy, "ROOT", tmp_path)
     monkeypatch.setattr(deploy, "RUNTIME", runtime)
+    monkeypatch.setattr(deploy_comparison, "RUNTIME", runtime)
+    monkeypatch.setattr(deploy_comparison, "kubectl", lambda *args: "")
     monkeypatch.setattr(deploy, "role", lambda *args: None)
     monkeypatch.setattr(deploy, "seed_reference", AsyncMock())
     monkeypatch.setattr(deploy, "Settings", lambda **kwargs: Settings(_env_file=None))
@@ -173,12 +175,15 @@ def test_deployment_state_is_written_only_after_verified_readiness(tmp_path, mon
         "kubeletPrincipalId": "kubelet",
         "registryId": "/registry",
         "searchEndpoint": "https://search.example",
+        "registryName": "registry",
         "registryServer": "registry.example",
         "clusterName": "cluster",
         "identityClientId": "client",
     }
 
     def az_json(*args):
+        if args[:2] == ("aks", "list"):
+            return []
         if args[:2] == ("deployment", "group"):
             return {key: {"value": value} for key, value in outputs.items()}
         if args[:2] == ("account", "show"):
@@ -190,6 +195,8 @@ def test_deployment_state_is_written_only_after_verified_readiness(tmp_path, mon
             (runtime / "kubeconfig").write_text("synthetic configuration")
         if "rollout" in args and failure == "rollout":
             raise RuntimeError("rollout not ready")
+        if args[:3] == ("az", "acr", "build"):
+            assert args[args.index("--target") + 1] == "runtime"
         return ""
 
     def verify(url):
@@ -202,9 +209,43 @@ def test_deployment_state_is_written_only_after_verified_readiness(tmp_path, mon
     monkeypatch.setattr(deploy, "verify_public_url", verify)
     if failure:
         with pytest.raises(RuntimeError):
-            deploy.deploy(skip_infra=True, skip_build=True, tag="synthetic")
+            deploy.deploy(skip_infra=True, skip_build=False, tag="synthetic")
         assert json.loads(state.read_text()) == previous
     else:
         deploy.deploy(skip_infra=True, skip_build=True, tag="synthetic")
         assert json.loads(state.read_text())["image"] == "registry.example/silvercare:synthetic"
         assert state.stat().st_mode & 0o777 == 0o600
+
+
+def test_fresh_clone_checks_existing_cluster_before_any_infrastructure_write(tmp_path, monkeypatch):
+    runtime = tmp_path / ".runtime"
+    monkeypatch.setattr(deploy, "ROOT", tmp_path)
+    monkeypatch.setattr(deploy, "RUNTIME", runtime)
+    monkeypatch.setattr(deploy_comparison, "RUNTIME", runtime)
+    calls = []
+
+    def az_json(*args):
+        assert args[:2] == ("aks", "list")
+        return [
+            {"name": "unrelated-cluster", "resourceGroup": "another-project"},
+            {"name": "existing-custom-cluster", "resourceGroup": deploy.GROUP.upper()},
+        ]
+
+    def fake_command(*args, **kwargs):
+        calls.append(args)
+        assert args[:3] == ("az", "aks", "get-credentials"), "No infrastructure writes allowed"
+        assert "existing-custom-cluster" in args
+        runtime.mkdir(exist_ok=True)
+        (runtime / "kubeconfig").write_text("credentials for the existing cluster")
+        return ""
+
+    def marker(*args):
+        assert (runtime / "kubeconfig").exists()
+        return '{"data":{"mode":"dedicated"}}'
+
+    monkeypatch.setattr(deploy, "az_json", az_json)
+    monkeypatch.setattr(deploy, "command", fake_command)
+    monkeypatch.setattr(deploy_comparison, "kubectl", marker)
+    with pytest.raises(ValueError, match="Shared deployment commands are blocked"):
+        deploy.deploy(skip_infra=False, skip_build=True, tag="must-not-deploy")
+    assert len(calls) == 1

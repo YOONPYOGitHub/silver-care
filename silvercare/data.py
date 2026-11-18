@@ -301,7 +301,7 @@ def chunks(text: str, size: int = 1000, overlap: int = 120) -> Iterator[str]:
             split = max(
                 text.rfind("\n", start + size // 2, end), text.rfind(". ", start + size // 2, end)
             )
-            if split > start:
+            if split > start + overlap:
                 end = split + 1
         part = text[start:end].strip()
         if len(part) >= 20:

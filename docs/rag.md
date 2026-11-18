@@ -63,8 +63,10 @@ API 자료도 수집·문서화·임베딩할 수 있다. 모든 API를 채팅 �
 Azure Speech는 비교 프로필에서도 온라인 서비스다.
 
 `qwen-azure-rag`는 생성·검색어 확장만 같은 Qwen3.5-4B를 사용한다.
+공개 경로는 `/qwen-rag/`이며 내부 프로필 이름과 구분한다.
 문서·질문 벡터는 기존 `silvercare-embedding`의 text-embedding-3-small, 512차원이며
 기존 Azure AI Search `silvercare-knowledge-v9`, `silvercare-cases-v8`을 읽기 전용으로 재사용한다.
+1·4번은 인덱스 이름과 데이터가 같아도 서로 다른 Search 서비스·임베딩 계정에 연결된다.
 하이브리드 검색·semantic 재정렬·공식 근거 우선·부모/인접 문맥·사례·질병관리청 API는
 Azure 기준과 같은 공통 파이프라인이다. Qwen 임베딩 1024차원을 기존 인덱스에 혼용하거나
 OpenSearch·CPU BGE에 우회하지 않으며, Azure GPT를 생성 fallback으로 사용하지 않는다.
@@ -76,8 +78,9 @@ Qwen 응답에 인용을 요구하는 adapter도 OSS RAG와 공유한다.
 
 ## 2. 임베딩한 자료
 
-활성 설정은 `data/processed/expanded/release.json`,
-자료 수는 `data/processed/expanded/inventory.json`과 발행 보고서를 기준으로 한다.
+현재 프로필별 활성 연결은 `.runtime/service-isolation-state.json`과 해당 앱의 전용 ConfigMap을 따른다.
+`data/processed/expanded/release.json`은 검증된 자료 릴리스 기록이며 네 앱의 현재 연결을 한꺼번에
+갱신하는 설정 파일이 아니다. 자료 수는 `data/processed/expanded/inventory.json`과 발행 보고서를 기준으로 한다.
 각 행은 원본 파일 수나 원문 문서 수가 아닌 **검색 문서·청크 수**다.
 원본 파일별 레코드·스키마·통계는 [원본 분석](data-analysis.md)에 있다.
 

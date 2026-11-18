@@ -1,4 +1,4 @@
-"""Independent comparison apps and OSS search; the Azure baseline image is never changed."""
+"""Legacy comparison bootstrap and shared HTTPS routes; active releases use service_isolation."""
 
 import argparse
 import json
@@ -9,6 +9,8 @@ from silvercare.deploy import RUNTIME, az_json
 
 NAMESPACE = "silvercare-local"
 BASELINE_NAMESPACE = "silvercare"
+QWEN_PUBLIC_PATH = "/qwen-rag"
+QWEN_LEGACY_PATH = "/qwen-azure-rag"
 CPU_RUNTIME = (
     "silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:"
     "a8f38f27b0952a8bdc539ad4b7cc9acdc1fbbdf87f8acf1b883df5f7746dde49"
@@ -116,6 +118,8 @@ def dedicated_runtime_active() -> bool:
 
 
 def reject_shared_deployment() -> None:
+    if not (RUNTIME / "kubeconfig").is_file():
+        raise ValueError("A verified kubeconfig is required before shared deployment operations")
     if dedicated_runtime_active():
         raise ValueError(
             "Dedicated runtime migration is active. Shared deployment commands are blocked; "
@@ -254,7 +258,7 @@ def qwen_azure_resources(image: str, baseline: dict[str, str]) -> list[dict[str,
             "APP_ENV": "production",
             "TRUSTED_PROXY": "true",
             "SERVICE_VARIANT": "qwen-azure-rag",
-            "BASE_PATH": "/qwen-azure-rag",
+            "BASE_PATH": QWEN_PUBLIC_PATH,
             "LOCAL_LLM_ENDPOINT": "http://foundry-gateway:8080",
             "LOCAL_LLM_MODEL": "qwen3.5-4b",
             "LOCAL_REQUEST_TIMEOUT": "600",
@@ -496,15 +500,20 @@ def configure_identity() -> tuple[str, str]:
     return identity["clientId"], account["tenantId"]
 
 
-def route_block(variant: str) -> str:
+def proxy_route_block(variant: str, path: str) -> str:
     return (
-        f"  redir /{variant} /{variant}/ 308\n"
-        f"  handle_path /{variant}/* {{\n"
+        f"  redir {path} {path}/ 308\n"
+        f"  handle_path {path}/* {{\n"
         f"    reverse_proxy {variant}.{NAMESPACE}.svc.cluster.local:8000 {{\n"
         "      header_up X-Real-IP {remote_host}\n"
         "      transport http {\n        response_header_timeout 660s\n      }\n"
         "    }\n  }\n"
     )
+
+
+def route_block(variant: str) -> str:
+    path = QWEN_PUBLIC_PATH if variant == "qwen-azure-rag" else "/" + variant
+    return proxy_route_block(variant, path)
 
 
 def route_config(original: str) -> str:
@@ -521,7 +530,7 @@ def route_config(original: str) -> str:
 
 
 def qwen_azure_route_config(original: str) -> str:
-    if "/qwen-azure-rag/" in original:
+    if QWEN_PUBLIC_PATH + "/" in original:
         raise ValueError("Qwen Azure routes already exist; refusing to overwrite")
     marker = "  handle {\n  reverse_proxy silvercare:8000 {"
     if (
@@ -530,6 +539,11 @@ def qwen_azure_route_config(original: str) -> str:
         or original.count(route_block("local-only")) != 1
     ):
         raise ValueError("Unexpected existing comparison routes; refusing replacement")
+    legacy = proxy_route_block("qwen-azure-rag", QWEN_LEGACY_PATH)
+    if original.count(legacy) == 1:
+        return original.replace(legacy, route_block("qwen-azure-rag"), 1)
+    if QWEN_LEGACY_PATH in original:
+        raise ValueError("Unexpected legacy Qwen routes; refusing replacement")
     return original.replace(marker, route_block("qwen-azure-rag") + marker, 1)
 
 
@@ -592,7 +606,7 @@ def add_routes() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Manage isolated model-comparison services")
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
         choices=[

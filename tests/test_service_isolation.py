@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -107,7 +108,9 @@ def test_canary_preserves_image_and_url_but_cannot_receive_public_service_traffi
     config, deployment = application_resources(name, profile, canary=True)
     pod = deployment["spec"]["template"]["spec"]
     assert pod["containers"][0]["image"] == profile["image"]
-    assert config["data"]["BASE_PATH"] == profile["original_config"]["BASE_PATH"]
+    assert config["data"]["BASE_PATH"] == (
+        "/qwen-rag" if name == "qwen-azure-rag" else profile["original_config"]["BASE_PATH"]
+    )
     assert config["data"]["PUBLIC_ORIGIN"] == profile["original_config"]["PUBLIC_ORIGIN"]
     assert deployment["spec"]["selector"]["matchLabels"]["app"] != profile["app"]
     assert config["metadata"]["namespace"] == profile["namespace"]
@@ -143,6 +146,12 @@ def test_legacy_deployment_remains_available_before_migration(tmp_path, monkeypa
     deploy_comparison.reject_shared_deployment()
 
 
+def test_legacy_mutation_is_blocked_without_a_verified_kubeconfig(tmp_path, monkeypatch):
+    monkeypatch.setattr(deploy_comparison, "RUNTIME", tmp_path)
+    with pytest.raises(ValueError, match="kubeconfig"):
+        deploy_comparison.reject_shared_deployment()
+
+
 def test_snapshot_cannot_reconstruct_unsafe_original_bindings_after_migration(
     tmp_path, monkeypatch
 ):
@@ -169,3 +178,117 @@ def test_tagged_image_is_rejected_before_any_runtime_read(monkeypatch):
     monkeypatch.setattr(service_isolation, "load", lambda: pytest.fail("No runtime access"))
     with pytest.raises(ValueError, match="immutable image digest"):
         service_isolation.deploy_image("local-rag", "registry/app:latest", "app")
+
+
+@pytest.mark.parametrize("component", ["app", "gateway"])
+@pytest.mark.parametrize(
+    "drift", ["missing_config", "foreign_config", "secret_overlay", "explicit_value", "value_from"]
+)
+def test_image_update_rejects_missing_or_overridden_resource_bindings(
+    monkeypatch, component, drift
+):
+    config = state()
+    profile = config["profiles"]["local-rag"]
+    profile["cutover_complete"] = True
+    image = "registry.test/app@sha256:" + "a" * 64
+    resources = (
+        application_resources("local-rag", profile)
+        if component == "app"
+        else gateway_resources("local-rag", profile, image)
+    )
+    deployment = next(row for row in resources if row["kind"] == "Deployment")
+    data = next(row for row in resources if row["kind"] == "ConfigMap")["data"]
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    key = "LOCAL_LLM_ENDPOINT" if component == "app" else "FOUNDRY_ENDPOINT"
+    if drift == "missing_config":
+        container.pop("envFrom")
+    elif drift == "foreign_config":
+        container["envFrom"][0]["configMapRef"]["name"] = "another-profile-config"
+    elif drift == "secret_overlay":
+        container["envFrom"].append({"secretRef": {"name": "unknown-overrides"}})
+    elif drift == "explicit_value":
+        container["env"] = [{"name": key, "value": "http://another-profile:8080"}]
+    else:
+        container["env"] = [
+            {
+                "name": key,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": "unknown-overrides",
+                        "key": key,
+                    }
+                },
+            }
+        ]
+
+    def read_only(*args):
+        assert "get" in args, "An unsafe image update attempted a cluster mutation"
+        return json.dumps(deployment if "deployment" in args else {"data": data})
+
+    monkeypatch.setattr(service_isolation, "load", lambda: config)
+    monkeypatch.setattr(service_isolation, "kubectl", read_only)
+    monkeypatch.setattr(service_isolation, "save", lambda _: pytest.fail("No release saved"))
+    with pytest.raises(ValueError, match="bindings|configuration"):
+        service_isolation.deploy_image("local-rag", image, component)
+
+
+@pytest.mark.parametrize("component", ["app", "gateway", "local-reranker"])
+@pytest.mark.parametrize("rollout_failed", [False, True])
+def test_image_update_preserves_bindings_and_saves_only_after_rollout(
+    monkeypatch, component, rollout_failed
+):
+    config = state()
+    profile = config["profiles"]["local-rag"]
+    profile["cutover_complete"] = True
+    image = "registry.test/app@sha256:" + "b" * 64
+    if component == "app":
+        resources = application_resources("local-rag", profile)
+    elif component == "gateway":
+        resources = gateway_resources("local-rag", profile, "previous-image")
+    else:
+        resources = deploy_comparison.cpu_reranker_resources("previous-image")
+    deployment = next(row for row in resources if row["kind"] == "Deployment")
+    configuration = next((row for row in resources if row["kind"] == "ConfigMap"), None)
+    if component == "app":
+        deployment["spec"]["template"]["spec"]["containers"][0]["env"] = [
+            {
+                "name": "KDCA_HEALTH_API_KEY",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": "silvercare-health",
+                        "key": "KDCA_HEALTH_API_KEY",
+                    }
+                },
+            }
+        ]
+    original = copy.deepcopy(deployment)
+    calls = []
+    saved = []
+
+    def kubectl(*args):
+        calls.append(args)
+        if "get" in args:
+            return json.dumps(deployment if "deployment" in args else configuration)
+        if "rollout" in args and rollout_failed:
+            raise RuntimeError("Rollout did not become ready")
+        return "ready"
+
+    monkeypatch.setattr(service_isolation, "load", lambda: config)
+    monkeypatch.setattr(service_isolation, "kubectl", kubectl)
+    monkeypatch.setattr(service_isolation, "save", lambda value: saved.append(copy.deepcopy(value)))
+    if rollout_failed:
+        with pytest.raises(RuntimeError, match="did not become ready"):
+            service_isolation.deploy_image("local-rag", image, component)
+        assert saved == []
+        assert profile.get("image" if component == "app" else component + "_image") != image
+    else:
+        service_isolation.deploy_image("local-rag", image, component)
+        assert (
+            saved[0]["profiles"]["local-rag"][
+                "image" if component == "app" else component + "_image"
+            ]
+            == image
+        )
+    assert deployment == original
+    assert sum("set" in call and "image" in call for call in calls) == 1
+    assert sum("rollout" in call for call in calls) == 1

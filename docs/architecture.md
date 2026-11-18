@@ -1,6 +1,6 @@
 # 아키텍처와 코드 구조
 
-코드·릴리스 설정 확인 기준일: 2026-11-16.
+코드·운영 절차 검토일: 2026-11-18. 자료·측정 시점은 해당 보고서를 따른다.
 자료별 사용 방식은 [RAG·API](rag.md), 실행 방법은 [운영 절차](operations.md)에 있다.
 
 ## 1. 서비스 구조
@@ -37,11 +37,13 @@ AKS LoadBalancer → Caddy → FastAPI
  │                                   └─ 질병관리청 실행 API
  ├─ /local-only/  → onlycpu → 전용 gateway·Qwen 생성·Speech
  │                                   검색·사례·임베딩·질병관리청 조회 없음
- └─ /qwen-azure-rag/ → qwazcpu → 전용 gateway·기존 Qwen 생성·검색어 확장
+ └─ /qwen-rag/ → qwazcpu → 전용 gateway·기존 Qwen 생성·검색어 확장
                       + 기존 Azure 임베딩·AI Search·semantic 재정렬·Speech·질병관리청 API
 ```
 
 `azure`, `local-rag`, `local-only`, `qwen-azure-rag`는 코드 복사본이 아닌 설정 프로필이다.
+4번의 공개 `BASE_PATH`는 `/qwen-rag`이며 내부 프로필·Deployment·Service 이름은 변경하지 않는다.
+기존 `/qwen-azure-rag` 공개 경로와 호환 리디렉션은 제공하지 않는다.
 각 앱의 HTML·이미지·JavaScript·API는 해당 URL 접두사 안에서 동작한다.
 비교 앱은 생성 모델·검색 연결 오류 시 다른 생성·검색 공급자로 우회하지 않는다.
 모델 단독도 일반 학습 지식으로 답하도록 하며, 검색 근거가 없다는 이유로 답변을 강제로 막지 않는다.
@@ -104,7 +106,9 @@ NetworkPolicy는 같은 프로필 내부 통신과 공통 Caddy의 앱 접근, D
 - [main.bicep](../infra/main.bicep): AKS·ACR·관리 ID와 **Free 검색**을 만드는 기본 템플릿이다.
 - [search-rag.bicep](../infra/search-rag.bicep): 운영 corpus 용량에 사용하는 **Basic 검색** 템플릿이다.
 - [service_isolation.py](../silvercare/service_isolation.py): 전용 연결·canary·이전·경계 정책·이미지 업데이트를 관리한다.
-- [deploy.py](../silvercare/deploy.py): 초기 단일 서비스 배포 도구다. 격리 marker가 있으면 기존 공유 배포는 차단한다.
+- [deploy.py](../silvercare/deploy.py): 초기 단일 서비스 배포 도구다. 로컬 kubeconfig가 없어도
+  기존 프로젝트 클러스터를 먼저 조회해 자격 증명을 준비하고, 격리 marker를 확인하기 전에는 인프라를 변경하지 않는다.
+  이미 격리한 환경의 공유 배포는 차단한다.
 - `data/processed/expanded/release.json`: 사용할 검색 endpoint·인덱스·검색 기능 설정이다.
 - `.runtime/service-isolation-state.json`: 전용 연결·기존 설정·이미지·canary 검증의 현재 운영 상태다.
 - `.runtime/deployment.json`: 격리 이전 단일 서비스 배포 기록이며 현재 연결의 기준으로 사용하지 않는다.

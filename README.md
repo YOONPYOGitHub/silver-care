@@ -13,9 +13,11 @@
 | Azure 기준 | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/> | GPT-6.1-Terra + Azure AI Search |
 | 소형 모델 + RAG | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/local-rag/> | Qwen3.5-4B + Qwen3-Embedding-0.6B + OpenSearch + BGE 재정렬 |
 | 소형 모델 단독 | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/local-only/> | 같은 Qwen3.5-4B, 검색·임베딩·검색어 확장·질병관리청 근거 조회 없음 |
-| Qwen + Azure RAG | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/qwen-azure-rag/> | 같은 Qwen3.5-4B + 기존 Azure AI Search·512차원 임베딩·semantic 재정렬 |
+| Qwen + Azure RAG | <https://ondam-e4b60458.koreacentral.cloudapp.azure.com/qwen-rag/> | 같은 Qwen3.5-4B + 기존 Azure AI Search·512차원 임베딩·semantic 재정렬 |
 
 하나의 코드베이스에서 `SERVICE_VARIANT`와 독립 Deployment·Service·URL로 구분한다.
+4번의 내부 프로필·리소스 이름은 `qwen-azure-rag`를 유지하고 공개 경로만 `/qwen-rag/`로 사용한다.
+이전 `/qwen-azure-rag/` 공개 경로는 제공하지 않으며 호환 리디렉션도 두지 않는다.
 화면 상단에는 버전·모델·검색 공급자 구분을 표시하지 않고 같은 공통 헤더를 사용한다.
 내부 구성은 URL과 운영 설정으로 구분하며 답변 출처·의료 주의 안내는 유지한다.
 Azure 기준 서비스의 배포 이미지는 `azure-baseline-20261116-3b2c666`으로 유지한다.
@@ -63,7 +65,8 @@ Azure RAG 두 서비스의 Search도 별도다. 4번의 기존 모델·검색 �
 지식에는 보건복지부·복지로의 2026년 노령층 복지서비스 35개 사업 이용안내가 포함된다.
 사업별 신청·문의와 원문 쪽수를 보존하며, 병합된 금액·자격 표와 이미지는 제외한다.
 평가 전용 1,721개와 질병관리청 API 본문은 임베딩 대상이 아니다.
-문서 임베딩과 질문 임베딩은 `silvercare-embedding` 배포의 512차원 벡터를 사용한다.
+Azure Search를 쓰는 1·4번은 각 전용 계정의 `silvercare-embedding` 배포와 512차원 벡터를 사용한다.
+2번은 Qwen 임베딩의 별도 1024차원 OpenSearch 인덱스를 사용하며 3번은 임베딩을 호출하지 않는다.
 이는 모델 재학습이나 지식증류가 아니다.
 
 의료 보강 `v7`는 기존 자료에 WHO 통합 돌봄·기능 저하, VA 욕창 관리,
@@ -148,6 +151,9 @@ uv run pytest -q
 uv run ruff check silvercare tests
 uv run mypy
 node --check silvercare/static/app.js
+uv run --project evaluation pytest -q evaluation/tests
+uv run --directory evaluation ruff check ondam_eval tests
+uv run --directory evaluation mypy
 ```
 
 프론트엔드 회귀 테스트와 JavaScript 문법 검사에는 Node.js가 필요하다.
@@ -159,7 +165,8 @@ Node.js가 없으면 해당 pytest가 건너뛰어질 수 있으므로 전체 �
 ## 운영 경계
 
 앱은 AKS에서 공개 HTTPS로 제공하며 모델·검색·음성에는 Workload Identity로 접근한다.
-질병관리청 키만 서버의 Kubernetes Secret으로 주입한다. 키·원본·정제본은 이미지에 넣지 않는다.
+질병관리청 키와 선택적 평가 추적 토큰은 각각 전용 Kubernetes Secret으로 주입한다.
+Azure API 키·원본·정제본은 이미지에 넣지 않는다.
 Azure 리소스가 한국에 있어도 `GlobalStandard` 모델의 국내 추론을 보장하지는 않는다.
 단일 노드·앱·엣지·검색 replica 구성은 고가용성 구성이 아니다.
 

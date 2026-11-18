@@ -432,10 +432,45 @@ def verify_public_url(url: str) -> None:
         raise RuntimeError("Public HTTPS health verification failed; deployment is not ready")
 
 
+def guard_existing_clusters() -> None:
+    from silvercare.deploy_comparison import reject_shared_deployment
+
+    clusters = az_json("aks", "list", "--query", "[].{name:name,resourceGroup:resourceGroup}")
+    if not isinstance(clusters, list) or any(
+        not isinstance(cluster, dict)
+        or not isinstance(cluster.get("name"), str)
+        or not cluster["name"].strip()
+        or not isinstance(cluster.get("resourceGroup"), str)
+        for cluster in clusters
+    ):
+        raise ValueError("Invalid existing AKS cluster inventory; refusing deployment")
+    for cluster in clusters:
+        if cluster["resourceGroup"].casefold() != GROUP.casefold():
+            continue
+        RUNTIME.mkdir(exist_ok=True, mode=0o700)
+        RUNTIME.chmod(0o700)
+        kubeconfig = RUNTIME / "kubeconfig"
+        command(
+            "az",
+            "aks",
+            "get-credentials",
+            "-g",
+            GROUP,
+            "-n",
+            cluster["name"],
+            "--admin",
+            "--file",
+            str(kubeconfig),
+            "--overwrite-existing",
+        )
+        kubeconfig.chmod(0o600)
+        reject_shared_deployment()
+
+
 def deploy(skip_infra: bool, skip_build: bool, tag: str) -> None:
     from silvercare.deploy_comparison import reject_shared_deployment
 
-    reject_shared_deployment()
+    guard_existing_clusters()
     RUNTIME.mkdir(exist_ok=True, mode=0o700)
     RUNTIME.chmod(0o700)
     if not skip_infra:
@@ -512,6 +547,8 @@ def deploy(skip_infra: bool, skip_build: bool, tag: str) -> None:
             f"silvercare:{tag}",
             "--file",
             str(ROOT / "Dockerfile"),
+            "--target",
+            "runtime",
             "--no-logs",
             str(ROOT),
         )
@@ -531,6 +568,7 @@ def deploy(skip_infra: bool, skip_build: bool, tag: str) -> None:
         "--overwrite-existing",
     )
     kubeconfig.chmod(0o600)
+    reject_shared_deployment()
     app_settings = Settings()
     resources = kubernetes_resources(
         image,

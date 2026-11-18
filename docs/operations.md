@@ -1,6 +1,6 @@
 # 실행·수집·배포·검증
 
-자료·릴리스 설정 확인 기준일: 2026-11-16.
+코드·운영 절차 검토일: 2026-11-18. 자료·릴리스·측정 시점은 해당 보고서를 따른다.
 프로젝트 루트에서 실행한다. 구조는 [아키텍처](architecture.md), 데이터 의미는 [RAG·API](rag.md)를 따른다.
 
 ## 1. 설정과 비밀값
@@ -45,7 +45,10 @@ POST는 실제 404로 응답해 이 API에서 사용하지 않는다.
 
 기존 root URL의 앱 이미지는 `azure-baseline-20261116-3b2c666`으로 고정한다.
 비교 앱은 `silvercare-local` namespace의 독립 Deployment·Service와
-`/local-rag/`, `/local-only/`, `/qwen-azure-rag/` 경로를 사용한다.
+`/local-rag/`, `/local-only/`, `/qwen-rag/` 경로를 사용한다.
+4번의 내부 프로필·Deployment·Service 이름은 `qwen-azure-rag`로 유지한다.
+앱 ConfigMap의 `BASE_PATH=/qwen-rag`가 HTML·정적 파일·API 접두사를 결정한다.
+기존 `/qwen-azure-rag` 공개 경로와 호환 리디렉션은 제공하지 않는다.
 기존 배포 명령으로 비교 이미지를 root 앱에 배포하지 않는다.
 
 ### Foundry 모델과 비용
@@ -93,7 +96,7 @@ readiness `/info`는 추론 대기열 뒤에 다시 모델 계산을 추가하�
 
 ```bash
 az acr build --registry silvercare2a5aalbg7ugfc \
-  --image silvercare:COMPARISON_TAG --file Dockerfile --no-logs .
+  --image silvercare:COMPARISON_TAG --file Dockerfile --target runtime --no-logs .
 uv run python -m silvercare.service_isolation deploy-image \
   --profile qwen-azure-rag --component app \
   --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:VERIFIED_DIGEST
@@ -126,6 +129,24 @@ MRR이 0.637681→0.626812로 하락해 사전 기준(최대 하락 0.01)을 통
 이 검사는 각 질문의 동결된 RRF 상위 12개 후보 안에서의 비교이며 전체 임상 품질 인증이 아니다.
 TEI 롤백 manifest는 `.runtime/reranker-tei-rollback.json`에 별도로 보존한다.
 
+### BGE GPU 검토 상태
+
+현재 2번은 위 FP32 ONNX **CPU** runtime을 사용한다. Azure GPU로 전환하거나 새 endpoint를 배포하지 않았다.
+같은 기반 모델의 Azure 카탈로그 자산
+`azureml://registries/HuggingFace/models/baai-bge-reranker-v2-m3/versions/6`과
+`tei-rerank-gpu-extra-small` GPU 엔진 version 1의 등록은 확인했다.
+카탈로그 기본 SKU는 `Standard_NC4as_T4_v3`, 실행 경로는 Azure ML 관리형 endpoint의 `/rerank`다.
+[모델 카드](https://ai.azure.com/catalog/models/baai-bge-reranker-v2-m3)를 참고한다.
+
+2026-11-18 읽기 전용 확인에서 `Microsoft.MachineLearningServices`는 Registered였으나,
+Korea Central의 **Azure ML 전용 T4 계열 vCPU 한도는 0**이고 프로젝트 workspace는 없었다.
+Foundry Managed Compute 쿼터·일반 VM 쿼터·Azure ML 쿼터를 혼동하지 않는다.
+SKU가 지원 목록에 있어도 구독 할당·실제 GPU 공급을 보장하지 않는다.
+카탈로그 기본 revision `main`·CUDA image의 `latest` 태그는 고정된 현재 ONNX artifact와 다르다.
+revision·tokenizer·정밀도·8192-token 비절단·점수 형식과 검색/의료 품질을 검증하기 전에
+동등한 배포나 완료된 속도 개선으로 표시하지 않는다. 공유 시험 용량도 지속 운영 보장으로 간주하지 않는다.
+AKS를 중지해도 별도 Foundry 모델 컴퓨트가 자동으로 중지되는 것은 아니므로 비용을 각각 확인한다.
+
 ### 전용 연결 유지와 이미지 업데이트
 
 ```bash
@@ -135,6 +156,8 @@ uv run python -m silvercare.service_isolation deploy-image \
 ```
 
 이 명령은 선택한 서비스의 이미지 하나만 바꾸며 node·관리 ID·연결 설정의 drift를 거부한다.
+앱·gateway는 지정된 전용 ConfigMap 하나만 참조해야 한다. 참조 누락·다른 ConfigMap·Secret overlay와
+보호된 연결값을 덮어쓰는 직접 `env`/`valueFrom`은 이미지 변경 전에 거부한다.
 프로필은 `azure`, `local-rag`, `local-only`, `qwen-azure-rag`다.
 `--component gateway`는 해당 프로필의 gateway만, `local-reranker`·`local-search`는 2번만 선택할 수 있다.
 1번 기준 이미지도 변경 승인을 받은 경우에만 업데이트한다.
@@ -144,6 +167,9 @@ uv run python -m silvercare.service_isolation deploy-image \
 `deploy.py`, `deploy_comparison deploy`, `deploy-qwen-azure`, `deploy-reranker`, `models`로
 공유 연결을 재생성하지 않는다. 전용 상태 파일은 0600 권한으로 보관·백업하며 Git에 넣지 않는다.
 다른 운영 환경에서 이 파일 없이 snapshot을 새로 만들어 현재 연결을 덮어쓰지 않는다.
+공유 변경 명령은 kubeconfig 없이 실행할 수 없다. 초기 `deploy.py`도 기존 프로젝트 클러스터의
+자격 증명을 먼저 확보해 marker를 확인한다. 클러스터가 중지됐거나 인증·조회가 실패하면
+보호 검증을 생략하지 않고 인프라 변경 전에 종료한다.
 이전 공용 관리 ID의 두 AKS federated credential은 폐기했다.
 NetworkPolicy는 다른 프로필의 내부 API·gateway·검색·재정렬 연결을 차단하고,
 Azure RBAC는 다른 계정의 추론·검색 접근을 거부한다.
@@ -201,7 +227,11 @@ Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge
 기존 root reverse proxy는 보존하며 비교 API/static만 각 서비스로 전달한다.
 클라이언트 IP와 비교용 660초 upstream timeout을 별도로 전달한다.
 기존 `/local-rag/`, `/local-only/` 경로가 있으면 그 블록과 root proxy를 보존하면서
-`/qwen-azure-rag/`만 추가하고 `.runtime/qwen-azure-baseline-edge.json`에 추가 전 설정을 보관한다.
+`/qwen-rag/`만 추가하며 이전 주소의 리디렉션은 만들지 않는다.
+기존 `/qwen-azure-rag/` 프록시가 있으면 알려진 블록만 교체하며 다른 형태이면 자동 변경하지 않는다.
+`.runtime/qwen-azure-baseline-edge.json`에 추가 전 설정을 보관한다.
+기존 배포의 주소를 바꿀 때는 실제 앱 ConfigMap의 `BASE_PATH`만 수정하고 해당 앱을 재시작한 뒤
+Caddy 경로를 전환한다. 모델·검색 설정과 다른 앱 이미지는 변경하지 않는다.
 요청한 경로가 모두 존재하면 재실행으로 덮어쓰지 않는다.
 이후 앱 업데이트에는 전용 `service_isolation deploy-image`만 사용한다.
 앱과 gateway는 긴 비교 요청을 배포 중 잘라 버리지 않도록 종료 유예 660초를 둔다.
@@ -412,25 +442,43 @@ endpoint가 없는 발행 보고서는 서비스 일치를 검증할 수 없어 
 
 ## 5. AKS 배포
 
-리소스를 다시 만들지 않고 앱을 갱신할 때는 새로운 고유 이미지 태그를 지정한다.
+### 현재 격리된 네 서비스 업데이트
+
+고유 태그로 앱 이미지를 빌드한 뒤 registry에서 확인한 불변 digest로 선택한 프로필만 갱신한다.
+`runtime` target은 앱·gateway용이며 큰 CPU 재정렬 모델을 빌드에 포함하지 않는다.
 
 ```bash
-uv run python -m silvercare.deploy --skip-infra --tag release-YYYYMMDD-N
+az acr build --registry silvercare2a5aalbg7ugfc \
+  --image silvercare:release-YYYYMMDD-N --file Dockerfile --target runtime --no-logs .
+az acr repository show --name silvercare2a5aalbg7ugfc \
+  --image silvercare:release-YYYYMMDD-N --query digest -o tsv
+uv run python -m silvercare.service_isolation deploy-image \
+  --profile qwen-azure-rag --component app \
+  --image silvercare2a5aalbg7ugfc.azurecr.io/silvercare@sha256:VERIFIED_DIGEST
 .runtime/bin/kubectl --kubeconfig .runtime/kubeconfig -n silvercare get pods,svc
-curl -fsS https://ondam-e4b60458.koreacentral.cloudapp.azure.com/health/live
+curl -fsS https://ondam-e4b60458.koreacentral.cloudapp.azure.com/qwen-rag/health/ready
 ```
 
-`deploy`는 `release.json`을 읽고 ACR 빌드·IAM 확인·Kubernetes 적용·rollout·공개 HTTPS 검증을 수행한다.
-배포 상태 파일은 rollout과 공개 HTTPS 검증이 성공한 뒤에만 원자적으로 갱신한다.
-실패한 배포를 마지막 정상 배포로 기록하지 않으며, Secret을 포함할 수 있는 stdin 적용 실패의 원문 stderr는 출력하지 않는다.
-질병관리청 키가 설정되어 있으면 `silvercare-health` Secret을 적용하고 앱 환경변수에 참조로 연결한다.
+`deploy-image`는 rollout 성공 뒤에만 전용 상태의 이미지 포인터를 갱신한다.
+readiness 성공만으로 모델 추론·STT/TTS 성공을 단정하지 않으며 실제 질문·출처·음성도 확인한다.
+검색 인덱스·endpoint·기능 설정의 전환은 이미지 갱신과 별도다. 새 자료는 해당 프로필의 전용 검색에
+발행·평가하고 연결 설정과 운영 상태를 검증한 뒤 별도 전환한다. 공유 배포로 우회하지 않는다.
+1번 기준 이미지의 변경과 운영 Azure 배포는 명시적으로 승인한 작업에서만 수행한다.
 문서·원본·처리 결과·`.env`는 [.dockerignore](../.dockerignore)에 의해 빌드에서 제외한다.
 앱 실행 Python은 `/app/.venv/bin/python`이다. 컨테이너에서 검증 명령을 실행할 때도 같은 환경을 사용한다.
+
+### 신규 단일 서비스 bootstrap
 
 신규 환경에는 [main.bicep](../infra/main.bicep)의 기반,
 [search-rag.bicep](../infra/search-rag.bicep)의 Basic 검색,
 모델·임베딩·음성 배포, IAM과 데이터 릴리스가 필요하다.
 기반 템플릿만으로 전체 RAG와 모델이 구성되지는 않는다.
+`python -m silvercare.deploy --tag ...`는 이 초기 단일 서비스 도구다. 이미 격리한 현재 환경의
+업데이트에 사용하지 않으며 `--skip-infra`도 격리 가드를 우회하지 않는다.
+초기 도구는 `release.json`을 읽고 빌드·IAM·Kubernetes 적용·rollout·공개 HTTPS를 검증한다.
+초기 배포 상태 파일은 rollout과 공개 HTTPS 검증이 모두 성공한 뒤에만 원자적으로 갱신한다.
+실패한 배포를 마지막 정상 배포로 기록하지 않으며, Secret을 포함할 수 있는 stdin 적용 실패의 원문 stderr는 출력하지 않는다.
+질병관리청 키가 설정되어 있으면 `silvercare-health` Secret을 적용하고 앱 환경변수에 참조로 연결한다.
 AKS·ACR·검색·모델·음성에는 요금이 발생한다.
 Basic 검색은 replica 1 / partition 1도 유료이며 비용은 Azure 현행 가격·계약으로 확인한다.
 
@@ -445,6 +493,9 @@ uv run pytest -q
 uv run ruff check silvercare tests
 uv run mypy
 node --check silvercare/static/app.js
+uv run --project evaluation pytest -q evaluation/tests
+uv run --directory evaluation ruff check ondam_eval tests
+uv run --directory evaluation mypy
 ```
 
 실제 검색·모델 평가에는 4절의 Azure 검색 설정이 필요하다.
@@ -550,6 +601,10 @@ uv run python -m silvercare.evaluate \
 
 ### 검증 결과와 한계
 
+다음 표는 Azure 기준 서비스와 개별 기능에 대해 보존한 검증 기록이다.
+네 프로필이 모두 같은 수치를 통과했다는 뜻이 아니며, 현재 비교 결과와 측정 조건은
+[네 서비스 평가 보고서](comparison-results-2026-11-16.md)를 따른다.
+
 검색·답변은 구어체·질문 범위·부모 문맥·한국어 용어를 보강한 `v8` 처리 보고서,
 음성은 2026-11-11 측정 보고서의 수치다.
 프론트엔드 상태·취소·접근성 검증은 코드 변경에 맞춰 실행하며 영구적 품질 보장이 아니다.
@@ -615,7 +670,8 @@ SHA256 `86341d7119995d26bdb2ad35992292471891123be9267d59dc24700aa7501617`이다.
 | `data/processed/expanded/retrieval-public-verification.json` | 운영 v8의 API 연결·자료 유형·용어·일상 대화·문맥 결합 검증 |
 | `data/processed/kdca-content-catalog.csv` / `.json` | 인증키 없는 공개 콘텐츠 목록 |
 | `data/processed/kdca-api-verification.json` | API 표본의 인증·본문 유무·hash |
-| `.runtime/deployment.json` | 배포 URL·이미지·클러스터 |
+| `.runtime/service-isolation-state.json` | 현재 전용 연결·기준 이미지·이전 설정·검증 결과. 0600 권한으로 백업 |
+| `.runtime/deployment.json` | 격리 이전 단일 서비스 배포 기록. 현재 전용 연결의 기준 아님 |
 | `.runtime/kubeconfig` | 관리 접근 정보. 비공개·Git 제외 |
 
 원본·처리 파일·런타임 상태는 [.gitignore](../.gitignore)로 제외한다.

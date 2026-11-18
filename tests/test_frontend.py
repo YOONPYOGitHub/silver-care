@@ -420,10 +420,12 @@ assert.equal(app.permissions.length, 0);
         self.run_javascript(
             r"""
 await app.send("서비스 구분 확인입니다.");
-assert.equal(app.requests[0].path, "/qwen-azure-rag/api/chat");
+assert.equal(app.requests[0].path, "/qwen-rag/api/chat");
+const reply = app.element("messages").lastElementChild;
+assert.equal(reply.childNodes[0].src, "/qwen-rag/static/mark.svg");
 assert.equal(app.element("status").lastChild.textContent, "상담 준비 완료");
 """,
-            '{basePath: "/qwen-azure-rag", variant: "qwen-azure-rag", requestTimeout: 600000}',
+            '{basePath: "/qwen-rag", variant: "qwen-azure-rag", requestTimeout: 600000}',
         )
 
     def test_model_only_uses_the_same_ready_header_without_exposing_search_mode(self):
