@@ -1,7 +1,28 @@
-# 실행·수집·배포·검증
+# 온담 서비스 운영 가이드
 
 코드·운영 절차 검토일: 2026-11-18. 자료·릴리스·측정 시점은 해당 보고서를 따른다.
 프로젝트 루트에서 실행한다. 구조는 [아키텍처](architecture.md), 데이터 의미는 [RAG·API](rag.md)를 따른다.
+일반 이용 방법과 연결 문제 안내는 [이용 가이드](user-guide.md)를 참고한다.
+
+## 운영 기준
+
+이 문서는 현재 구현된 서비스의 배포·자료 갱신·점검 절차다.
+향후 구현 계획이나 과거 실험 결과를 현재 운영 보장으로 취급하지 않는다.
+
+| 구분 | 현재 기준 |
+| --- | --- |
+| 사용자 접점 | 공개 HTTPS·한국어 브라우저 UI·기본 텍스트·선택형 음성 |
+| 운영 변경 단위 | 실행 프로필별 전용 자원과 검증한 이미지 digest. 공통 엣지 변경은 전체 경로 영향 확인 |
+| 정상 동작 확인 | 프로세스·의존성 상태와 실제 합성 질문의 답변·출처·STT/TTS를 구분해 확인 |
+| 장애 처리 | 연결·검색·모델·음성 오류를 명시. 다른 모델의 정상 답변으로 조용히 대체하지 않음 |
+| 데이터 취급 | 운영 사용자 대화를 시험 입력으로 쓰지 않음. 키·음성·원시 추적을 Git·이미지·일반 로그에 넣지 않음 |
+| 제공 수준 | 단일 replica 구성. SLA·고가용성·자동 응급 신고·24시간 대응을 보장하지 않음 |
+| 자료 이용 | 출처·판본·검토·라이선스와 비상업적 이용 조건을 유지. 상업화 전 별도 권리 검토 필요 |
+| 비용 | AKS·Search·Foundry·Speech를 각각 점검. 앱이나 AKS 중지가 관리형 GPU 과금 중단을 뜻하지 않음 |
+
+기본 이용 경로는 `/`, Qwen + Azure 검색은 `/qwen-rag/`다.
+실행 프로필·자원·기능 차이는 [실행 구성](architecture.md#서비스-실행-구성)을 따른다.
+모델·성능 실험 결과는 [평가 보고서](comparison-results-2026-11-16.md)에 별도로 보존한다.
 
 ## 1. 설정과 비밀값
 
@@ -41,15 +62,16 @@
 GET 요청의 `TOKEN`은 `httpx` 로그에서 가리고, 리다이렉트를 따라 전달하지 않는다.
 POST는 실제 404로 응답해 이 API에서 사용하지 않는다.
 
-## 네 가지 비교 서비스
+## 서비스 실행 구성
 
-기존 root URL의 앱 이미지는 `azure-baseline-20261116-3b2c666`으로 고정한다.
-비교 앱은 `silvercare-local` namespace의 독립 Deployment·Service와
+기본 root URL의 기준 이미지는 `azure-baseline-20261116-3b2c666`으로 고정한다.
+다른 실행 구성은 `silvercare-local` namespace의 독립 Deployment·Service와
 `/local-rag/`, `/local-only/`, `/qwen-rag/` 경로를 사용한다.
 4번의 내부 프로필·Deployment·Service 이름은 `qwen-azure-rag`로 유지한다.
 앱 ConfigMap의 `BASE_PATH=/qwen-rag`가 HTML·정적 파일·API 접두사를 결정한다.
 기존 `/qwen-azure-rag` 공개 경로와 호환 리디렉션은 제공하지 않는다.
-기존 배포 명령으로 비교 이미지를 root 앱에 배포하지 않는다.
+공유 bootstrap 명령이나 다른 프로필의 이미지로 기본 앱을 덮어쓰지 않는다.
+검증된 변경은 `feature/foundry-model-comparison` 브랜치에서 관리하며 main 반영·Azure 배포는 별도 승인한다.
 
 ### Foundry 모델과 비용
 
@@ -64,10 +86,9 @@ Serverless 목록에 안 보이는 것은 배포 부재를 의미하지 않는�
 관리 API가 요구하는 deployment template URI는 `labels/latest` 형식이다.
 2·3·4번의 Qwen 생성은 계정별 A100 80GB 1개씩, 2번의 Qwen 임베딩은 추가 A100 1개를 사용한다.
 1번 GPT·OpenAI 임베딩은 별도 계정의 GlobalStandard 배포다.
-사용하지 않는 비교 환경은 앱뿐 아니라 관리형 모델 컴퓨트도 비용 관점에서 점검한다.
-4번의 기존 계정·Qwen 생성·Azure 임베딩·Search는 유지한다.
-사용하지 않는 이전 공용 Qwen 임베딩 배포와 공용 gateway는 제거했다.
-원래 Foundry의 다른 프로젝트용 GPT 배포는 삭제하거나 할당량을 줄이지 않았다.
+사용하지 않는 실행 구성은 앱뿐 아니라 관리형 모델 컴퓨트도 비용 관점에서 점검한다.
+4번의 계정·Qwen 생성·Azure 임베딩·Search는 해당 프로필 전용 연결을 사용한다.
+다른 프로젝트의 모델 배포나 할당량을 서비스 작업에서 임의로 삭제·축소하지 않는다.
 
 생성은 native `/managed-deployments/{name}/v1/chat/completions`를 사용한다.
 통합 `/openai/v1/chat/completions`는 비사고 모드용 `chat_template_kwargs`를 거절한다.
@@ -82,16 +103,16 @@ gateway의 `/health`는 프로세스 상태이지 관리형 모델의 실제 준
 `azurecpu`, `onlycpu`, `qwazcpu`는 각각 D2ds_v5 1개이며 앱·gateway를 해당 서비스에만 배치한다.
 2번 전용 노드 `localmem`은 `Standard_D8ds_v5` 1개(8 vCPU / 32GiB),
 label `workload=local-ai`, taint `workload=local-ai:NoSchedule`다.
-기존 system 노드 2개는 유지한다. OpenSearch 데이터는 8Gi PVC다.
-기존 TEI cache 8Gi PVC는 롤백용으로 보존하며 최적화 runtime은 고정 이미지의 모델을 읽는다.
+system 노드 2개는 공통 기반 시설을 담당한다. OpenSearch 데이터는 8Gi PVC다.
+TEI cache 8Gi PVC는 롤백·평가 결과 보관용으로 보존하며 CPU runtime은 고정 이미지의 모델을 읽는다.
 reranker는 requests 3Gi / limits 24Gi, OpenSearch는 heap 1Gi / limits 4Gi다.
 같은 BGE FP32 가중치를 ONNX Runtime 1.23.2, 6개 intra-op thread로 실행한다.
 유휴 thread spinning은 끄고 길이순 microbatch(최대 8개·padding 포함 8192 tokens)를 사용한다.
-HTTP당 64개 후보를 모두 처리하며 16개 HTTP 요청만 대기시킨다.
+HTTP당 64개 후보를 모두 처리하며 동시 처리 중·대기를 합쳐 최대 16개 HTTP 요청을 수용한다.
 중복 query/text pair는 SHA256 key와 score만 저장하는 process-local LRU(2048개)로 재사용한다.
 공식 근거와 일반 근거 검색이 겹쳐도 후보나 출처를 버리지 않고 모델 평가만 중복 제거한다.
 readiness `/info`는 추론 대기열 뒤에 다시 모델 계산을 추가하지 않는다.
-전체 문맥 warm-up의 OOM을 피하기 위한 서버 설정이며 휴대폰 메모리 요구량 측정치가 아니다.
+서버 실행 자원 설정이며 휴대폰 메모리 요구량 측정치가 아니다.
 검색·재정렬은 Recreate 방식으로 업데이트해 단일 PVC·큰 warm-up 메모리의 중복 사용을 피한다.
 
 ```bash
@@ -129,7 +150,7 @@ MRR이 0.637681→0.626812로 하락해 사전 기준(최대 하락 0.01)을 통
 이 검사는 각 질문의 동결된 RRF 상위 12개 후보 안에서의 비교이며 전체 임상 품질 인증이 아니다.
 TEI 롤백 manifest는 `.runtime/reranker-tei-rollback.json`에 별도로 보존한다.
 
-### BGE GPU 검토 상태
+### 미적용 변경: BGE GPU
 
 현재 2번은 위 FP32 ONNX **CPU** runtime을 사용한다. Azure GPU로 전환하거나 새 endpoint를 배포하지 않았다.
 같은 기반 모델의 Azure 카탈로그 자산
@@ -161,7 +182,6 @@ uv run python -m silvercare.service_isolation deploy-image \
 프로필은 `azure`, `local-rag`, `local-only`, `qwen-azure-rag`다.
 `--component gateway`는 해당 프로필의 gateway만, `local-reranker`·`local-search`는 2번만 선택할 수 있다.
 1번 기준 이미지도 변경 승인을 받은 경우에만 업데이트한다.
-현재 기준 이미지와 프론트엔드는 자원 분리 과정에서 바꾸지 않았다.
 
 클러스터의 `silvercare/silvercare-runtime-isolation` marker는 기존 단일/공유 배포 명령을 차단한다.
 `deploy.py`, `deploy_comparison deploy`, `deploy-qwen-azure`, `deploy-reranker`, `models`로
@@ -170,27 +190,21 @@ uv run python -m silvercare.service_isolation deploy-image \
 공유 변경 명령은 kubeconfig 없이 실행할 수 없다. 초기 `deploy.py`도 기존 프로젝트 클러스터의
 자격 증명을 먼저 확보해 marker를 확인한다. 클러스터가 중지됐거나 인증·조회가 실패하면
 보호 검증을 생략하지 않고 인프라 변경 전에 종료한다.
-이전 공용 관리 ID의 두 AKS federated credential은 폐기했다.
 NetworkPolicy는 다른 프로필의 내부 API·gateway·검색·재정렬 연결을 차단하고,
 Azure RBAC는 다른 계정의 추론·검색 접근을 거부한다.
 동일 호스트의 HTTPS 진입점·클러스터 기반 시설·ACR·외부 질병관리청 API와 상위 한도는 공통 예외다.
 
 ### 서비스와 평가 부하 분리
 
-전체 비교의 의료 24건 ×4버전, 적용 가능한 retrieval 46건, audience 32건·detail 3건을 완료·보관했다.
-중지했던 2번 backend 평가는 자원 격리 후 2번 전용 연결과 별도 D8ds_v5 평가 CPU에서 마무리했다.
-평가 Pod와 임시 `evalcpu` pool은 삭제했다.
-의료·1·3·4번 backend는 격리 전, 2번 backend는 격리 후 측정이다.
-두 실행 조건과 공개 URL 지연을 섞어 하나의 성능 통계로 만들지 않는다.
-실패·기준 미통과도 원본에 보존하며 실행 완료와 품질 통과를 구분한다.
-수치와 한계는 [비교 보고서](comparison-results-2026-11-16.md)에 있다.
-향후 평가 복제본은 버전별 전용 모델·검색·관리 ID만 사용해야 한다.
+평가 복제본은 프로필별 전용 모델·검색·관리 ID만 사용한다.
 4번을 사용 중일 때 4번의 모델·검색에 전체 평가 부하를 다시 보내지 않는다.
 공개 재정렬과 다른 process·node에서 평가하며, 별도 CPU 노드는 사용 후 삭제한다.
 
-평가용 질문은 합성 데이터만 사용한다. 결과는 요청마다 checkpoint를 남기고 원시 결과를 보존한다.
+평가용 질문은 합성 데이터만 사용한다. 장시간 실행은 중단에 대비해 checkpoint와 원시 결과를 보존한다.
 공개 URL의 실제 카드 클릭 검증과 격리 환경의 전체 성능·품질 평가는 구분해 기록한다.
 단순 `/health/live` 성공을 실제 답변 생성의 성공으로 간주하지 않는다.
+실패·기준 미통과도 원본에 보존하며 실행 완료와 품질 통과를 구분한다.
+기존 실행의 완료 범위·측정 조건·임시 자원 정리 기록은 [평가 보고서](comparison-results-2026-11-16.md)에 있다.
 
 ### 문서 발행과 공개 순서
 
@@ -211,12 +225,12 @@ python -m silvercare.offline_ingest \
 ```
 
 발행기는 기존 인덱스를 덮어쓰지 않는다. 실패 시 부분 인덱스가 남으므로 새 이름으로 재시도하고,
-검증된 인덱스 이름을 비교 ConfigMap과 맞춘다. 보고서에는 source hash·수량·모델 정보를 남기며
+검증된 인덱스 이름을 해당 앱의 전용 ConfigMap과 맞춘다. 보고서에는 source hash·수량·모델 정보를 남기며
 성공 수량은 지식 6,562 / 사례 6,762여야 한다. 기존 Azure release 파일은 변경하지 않는다.
 기관 전화번호는 검증한 노령층 가이드의 발행기관 표시 유선번호만 보존한다.
 본문·분할·벡터·bulk 응답·refresh·최종 count 검증이 실패하면 성공 보고서를 쓰지 않는다.
 
-비교 앱의 실제 추론, hybrid 검색·출처, 모델 단독의 빈 출처·건강정보,
+각 앱의 실제 추론, hybrid 검색·출처, 모델 단독의 빈 출처·건강정보,
 Speech와 URL 접두사 분리를 확인한 뒤에만 다음 명령으로 경로를 공개한다.
 
 ```bash
@@ -224,8 +238,8 @@ uv run python -m silvercare.deploy_comparison routes
 ```
 
 Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge.json`에 백업한다.
-기존 root reverse proxy는 보존하며 비교 API/static만 각 서비스로 전달한다.
-클라이언트 IP와 비교용 660초 upstream timeout을 별도로 전달한다.
+기존 root reverse proxy는 보존하며 해당 API/static만 각 서비스로 전달한다.
+클라이언트 IP와 Qwen 경로의 660초 upstream timeout을 별도로 전달한다.
 기존 `/local-rag/`, `/local-only/` 경로가 있으면 그 블록과 root proxy를 보존하면서
 `/qwen-rag/`만 추가하며 이전 주소의 리디렉션은 만들지 않는다.
 기존 `/qwen-azure-rag/` 프록시가 있으면 알려진 블록만 교체하며 다른 형태이면 자동 변경하지 않는다.
@@ -234,12 +248,10 @@ Caddy 설정을 먼저 검증하고 원본을 `.runtime/comparison-baseline-edge
 Caddy 경로를 전환한다. 모델·검색 설정과 다른 앱 이미지는 변경하지 않는다.
 요청한 경로가 모두 존재하면 재실행으로 덮어쓰지 않는다.
 이후 앱 업데이트에는 전용 `service_isolation deploy-image`만 사용한다.
-앱과 gateway는 긴 비교 요청을 배포 중 잘라 버리지 않도록 종료 유예 660초를 둔다.
-인덱스 보고서와 비교 배포 상태는 별도 운영 파일로 보관하고 임시 indexer는 삭제한다.
-초기 단일 질문 smoke에서 모델 단독은 약 6.6초, CPU 재정렬을 포함한 RAG는
-복지 문의 약 86초, 낙상 문의 약 188초였다.
-이는 특정 질문·서버 설정의 단발 측정이며 일반 성능·의학 정확도·휴대폰 속도를 나타내지 않는다.
-버전별 설명 배너나 모델명은 화면 상단에 표시하지 않으며 요청 취소와 600초 비교용 제한은 유지한다.
+Qwen 앱은 종료 유예 660초를 두며, 별도 gateway의 종료 유예도 배포 전에 확인한다.
+인덱스 보고서와 전용 연결 상태는 별도 운영 파일로 보관하고 임시 indexer는 삭제한다.
+프로필별 설명 배너나 모델명은 화면 상단에 표시하지 않는다.
+Qwen 앱의 600초 요청 제한은 응답 시간 보장이 아니며, 자체 검색의 CPU 재정렬 지연을 별도로 점검한다.
 
 프론트엔드만 수정하면서 평가 중인 backend를 그대로 유지하려면
 `infra/Dockerfile.ui`의 `BASE_IMAGE`에 해당 버전의 검증된 이미지 digest를 지정한다.
@@ -447,6 +459,14 @@ endpoint가 없는 발행 보고서는 서비스 일치를 검증할 수 없어 
 고유 태그로 앱 이미지를 빌드한 뒤 registry에서 확인한 불변 digest로 선택한 프로필만 갱신한다.
 `runtime` target은 앱·gateway용이며 큰 CPU 재정렬 모델을 빌드에 포함하지 않는다.
 
+배포 전에는 다음을 확인한다.
+
+- 대상 프로필·공개 경로·현재 digest·전용 ConfigMap·Secret 참조와 운영 상태 파일을 확인·백업한다.
+- 변경 범위에 맞는 테스트와 린트·타입 검사를 통과한다. 프롬프트·검색·인용·안전 동작을 바꾸면
+  합성 질문의 품질 평가도 별도로 수행한다.
+- 배포 승인과 롤백 대상 이미지·설정·인덱스를 확인한다. 기본 구성의 기준 이미지를 다른 프로필과 혼용하지 않는다.
+- 사용자 시험·평가 작업과 배포 시간을 조정한다. 공통 엣지 변경은 네 경로 모두 점검할 준비를 한다.
+
 ```bash
 az acr build --registry silvercare2a5aalbg7ugfc \
   --image silvercare:release-YYYYMMDD-N --file Dockerfile --target runtime --no-logs .
@@ -461,6 +481,15 @@ curl -fsS https://ondam-e4b60458.koreacentral.cloudapp.azure.com/qwen-rag/health
 
 `deploy-image`는 rollout 성공 뒤에만 전용 상태의 이미지 포인터를 갱신한다.
 readiness 성공만으로 모델 추론·STT/TTS 성공을 단정하지 않으며 실제 질문·출처·음성도 확인한다.
+배포 후에는 다음을 기록한다.
+
+- 대상 URL의 HTML·정적 파일·API 접두사, 실제 질문 응답과 필요한 출처·공식 자료 열람
+- 텍스트·음성 모드 전환과 실제 STT/TTS, 음성 중단 후 마이크 상태
+- 대상 프로필의 노드·관리 ID·모델·검색·음성 연결 유지와 다른 서비스의 정상 동작
+- 배포 digest·시각·설정/자료 버전·확인 결과·남은 문제와 롤백 여부
+
+검증에 실패한 배포를 완료로 공지하지 않는다. 원인을 확인하고 승인한 이전 digest와 설정으로 복구한 뒤
+동일한 사용자 경로를 재검증한다. 이미지 rollout의 성공이 품질 승인이나 운영 완료와 같은 것은 아니다.
 검색 인덱스·endpoint·기능 설정의 전환은 이미지 갱신과 별도다. 새 자료는 해당 프로필의 전용 검색에
 발행·평가하고 연결 설정과 운영 상태를 검증한 뒤 별도 전환한다. 공유 배포로 우회하지 않는다.
 1번 기준 이미지의 변경과 운영 Azure 배포는 명시적으로 승인한 작업에서만 수행한다.
@@ -481,6 +510,23 @@ readiness 성공만으로 모델 추론·STT/TTS 성공을 단정하지 않으�
 질병관리청 키가 설정되어 있으면 `silvercare-health` Secret을 적용하고 앱 환경변수에 참조로 연결한다.
 AKS·ACR·검색·모델·음성에는 요금이 발생한다.
 Basic 검색은 replica 1 / partition 1도 유료이며 비용은 Azure 현행 가격·계약으로 확인한다.
+
+### 장애 판단과 복구
+
+다음은 수동 점검 절차이며 자동 감시·호출 체계가 구현됐다는 의미가 아니다.
+
+| 증상 | 우선 확인 | 대응 원칙 |
+| --- | --- | --- |
+| 모든 경로에 접속할 수 없음 | AKS 실행 상태, 공통 엣지·인증서·공개 IP/DNS | 공통 장애와 개별 앱 장애를 구분. 중지된 자원을 임의로 시작하거나 재생성하지 않음 |
+| 특정 경로만 오류 | 해당 앱·gateway rollout, ConfigMap의 경로·전용 연결·ID 권한 | 다른 프로필의 연결로 우회하지 않고 해당 경계 안에서 복구 |
+| `/health/live`는 정상이지만 답변 실패 | 검색 인덱스·모델 추론·필요한 공식 API, 안전상 거절과 기술 오류 구분 | 실제 합성 질문으로 검증. 실패를 빈 출처의 정상 답변으로 대체하지 않음 |
+| 자체 검색의 첫 질문이 매우 느림 | CPU 재정렬의 cache miss·연산·대기열과 노드 사용률 | API 동시성·timeout만 높여 해결됐다고 보지 않음. 성능 변경은 별도 평가·승인 |
+| 음성만 동작하지 않음 | 브라우저 권한·코덱·음량, 해당 Speech endpoint와 역할 | 글로 대화 경로를 유지하고 음성 문제를 명시 |
+| 자료가 오래되거나 잘못된 출처가 표시됨 | 자료 판본·원문·허용 범위·수집/발행/평가 hash | 원문과 재사용 조건 확인 후 새 버전으로 발행. 활성 인덱스를 즉시 덮어쓰지 않음 |
+
+기록에는 발생 시각·경로·오류 코드·배포 digest·재현한 합성 질문·영향 범위와 복구 결과를 남긴다.
+사용자 원문 대화·오디오·토큰·API 키를 장애 보고나 공개 이슈에 붙이지 않는다.
+중요한 건강 문제에는 서비스 복구를 기다리도록 안내하지 않고 119·의료진·담당 기관의 직접 확인을 우선한다.
 
 ## 6. 검증
 

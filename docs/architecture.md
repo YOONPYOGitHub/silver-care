@@ -1,7 +1,19 @@
-# 아키텍처와 코드 구조
+# 온담 서비스 아키텍처
 
 코드·운영 절차 검토일: 2026-11-18. 자료·측정 시점은 해당 보고서를 따른다.
-자료별 사용 방식은 [RAG·API](rag.md), 실행 방법은 [운영 절차](operations.md)에 있다.
+이용자 안내는 [이용 가이드](user-guide.md), 자료별 사용 방식은 [RAG·API](rag.md),
+배포·장애 대응은 [운영 가이드](operations.md)에 있다.
+
+## 설계 원칙
+
+| 원칙 | 서비스에 적용한 방식 |
+| --- | --- |
+| 이용자 중심의 공통 화면 | 텍스트를 기본으로 하고 선택형 음성·큰 글씨·고정 대화 조작부 제공 |
+| 근거와 생성의 구분 | 사실 근거·대화 사례·실행 API를 구분하고 실제 인용한 출처만 표시 |
+| 명시적인 처리 한계 | 진단·처방·자격 심사를 하지 않고, 외부 의존성 실패를 정상 답변으로 숨기지 않음 |
+| 서비스별 변경 영향 제한 | 실행 프로필별 전용 노드·관리 ID·모델·검색·음성과 교차 접근 제한 |
+| 개인정보 최소화 | 탭 메모리의 제한된 이력 사용, 서버 상담 이력 미보관, 외부 처리와 익명화 한계 안내 |
+| 운영 상태와 검증 기록의 분리 | 현재 설정은 운영 상태로 관리하고 과거 성능·품질 결과는 측정 조건과 함께 별도 보관 |
 
 ## 1. 서비스 구조
 
@@ -9,7 +21,7 @@
 어르신·보호자 브라우저
   │ HTTPS, 텍스트 모드·선택형 음성 대화
   ▼
-AKS LoadBalancer → Caddy → FastAPI
+AKS LoadBalancer → Caddy → FastAPI (기본 접속 경로)
                            ├─ Azure AI Search: 지식·사례 하이브리드 검색
                            ├─ Foundry Responses: 검색어 확장·답변 생성
                            ├─ Foundry Embeddings: 질문 벡터
@@ -27,7 +39,21 @@ AKS LoadBalancer → Caddy → FastAPI
 앱 시작·사용자 질문·앱 재배포 시 전체 corpus를 다시 수집하거나 임베딩하지 않는다.
 자동 수집 스케줄러·CronJob은 구현되어 있지 않다.
 
-### 비교 서비스의 독립 경로
+### 서비스 실행 구성
+
+기본 이용 주소는 `/`다. 같은 코드와 화면을 사용하는 다른 실행 구성은 별도 경로로 분리한다.
+아래 표는 운영·개발자를 위한 연결 정보이며 이용자에게 모델 선택을 요구하는 화면은 제공하지 않는다.
+
+| 구성 | 공개 경로 | 내부 프로필 | 기능 범위 |
+| --- | --- | --- | --- |
+| 기본 서비스 | `/` | `azure` | GPT + Azure Search·공식 건강정보·음성 |
+| Qwen + Azure 검색 | `/qwen-rag/` | `qwen-azure-rag` | Qwen + Azure Search·공식 건강정보·음성 |
+| Qwen + 자체 검색 | `/local-rag/` | `local-rag` | OpenSearch·CPU BGE의 품질·성능 검증, 공식 건강정보·음성 |
+| Qwen 단독 | `/local-only/` | `local-only` | 검색·공식 건강정보 없이 학습 지식으로 답변, 음성 |
+
+자체 검색 구성은 새로운 질문에서 재정렬 시간이 길 수 있다.
+병행 실행 경로의 존재를 동일한 품질·응답 시간 보장이나 임상 검증으로 해석하지 않는다.
+구성별 한계와 측정값은 [평가 보고서](comparison-results-2026-11-16.md)에 있다.
 
 ```text
 같은 Caddy HTTPS 호스트
@@ -37,26 +63,26 @@ AKS LoadBalancer → Caddy → FastAPI
  │                                   └─ 질병관리청 실행 API
  ├─ /local-only/  → onlycpu → 전용 gateway·Qwen 생성·Speech
  │                                   검색·사례·임베딩·질병관리청 조회 없음
- └─ /qwen-rag/ → qwazcpu → 전용 gateway·기존 Qwen 생성·검색어 확장
-                      + 기존 Azure 임베딩·AI Search·semantic 재정렬·Speech·질병관리청 API
+ └─ /qwen-rag/ → qwazcpu → 전용 gateway·Qwen 생성·검색어 확장
+                      + Azure 임베딩·AI Search·semantic 재정렬·Speech·질병관리청 API
 ```
 
 `azure`, `local-rag`, `local-only`, `qwen-azure-rag`는 코드 복사본이 아닌 설정 프로필이다.
 4번의 공개 `BASE_PATH`는 `/qwen-rag`이며 내부 프로필·Deployment·Service 이름은 변경하지 않는다.
 기존 `/qwen-azure-rag` 공개 경로와 호환 리디렉션은 제공하지 않는다.
 각 앱의 HTML·이미지·JavaScript·API는 해당 URL 접두사 안에서 동작한다.
-비교 앱은 생성 모델·검색 연결 오류 시 다른 생성·검색 공급자로 우회하지 않는다.
+앱은 생성 모델·검색 연결 오류 시 다른 생성·검색 공급자로 우회하지 않는다.
 모델 단독도 일반 학습 지식으로 답하도록 하며, 검색 근거가 없다는 이유로 답변을 강제로 막지 않는다.
 출처를 생성하지 않고 모델 지식 기반임을 표시하며 공통 응급·의료·개인정보 방침을 유지한다.
 
-`local-*`는 비교 프로필의 식별자이며 실제 오프라인·휴대폰 실행을 뜻하지 않는다.
+`local-*`는 내부 프로필의 식별자이며 실제 오프라인·휴대폰 실행을 뜻하지 않는다.
 생성·임베딩은 Foundry 호스팅, 재정렬과 검색은 AKS 실행이다.
 `qwen-azure-rag`는 검색·재정렬도 Azure AI Search를 사용하므로 실제 오프라인 RAG가 아니다.
 서비스별 관리 ID는 자기 계정의 추론·Speech와 자기 Search의 문서 읽기만 허용한다.
 NetworkPolicy는 같은 프로필 내부 통신과 공통 Caddy의 앱 접근, DNS·공개 HTTP(S)만 허용한다.
 다른 프로필의 내부 gateway는 접근할 수 없고, Azure 자원은 별도 RBAC로 교차 접근을 차단한다.
-검색 스키마·문서 ID·본문·캐시된 512차원 벡터를 검증해 1번 전용 Search에 복제했으며,
-4번의 인덱스·모델 배포·할당량은 변경하지 않았다. 새 임베딩 생성은 없었다.
+기본 구성과 Qwen + Azure 검색 구성은 각각의 전용 Search에 같은 지식·사례 corpus를 사용한다.
+두 구성의 512차원 인덱스와 자체 검색의 1024차원 인덱스는 벡터를 혼용하지 않는다.
 클라우드 모델 정밀도와 휴대폰 양자화 모델, 서버와 휴대폰의 실행 자원은 동일하지 않다.
 
 평가용 추적은 서버 기능 플래그와 별도 토큰으로 승인된 `/api/chat` 요청에서만 응답에 추가한다.
@@ -83,8 +109,8 @@ NetworkPolicy는 같은 프로필 내부 통신과 공통 Caddy의 앱 접근, D
 | 1번 검색 | `silvercare-v1-e4b60458` | Basic, replica 1 / partition 1, semantic Standard |
 | 2번 | `localmem` D8ds_v5 1개, `ondam-v2-e4b60458` | Qwen 생성 A100 1개 + 임베딩 A100 1개·Speech |
 | 3번 | `onlycpu` D2ds_v5 1개, `ondam-v3-e4b60458` | Qwen 생성 A100 1개·Speech, 검색·임베딩 없음 |
-| 4번 | `qwazcpu` D2ds_v5 1개, `ai-foundry-m098047` | 기존 Qwen 생성 A100 1개·512차원 임베딩·Speech |
-| 4번 검색 | `silvercare-rag-2a5aalbg7ugfc` | 기존 Basic·semantic Standard, 인덱스 유지 |
+| 4번 | `qwazcpu` D2ds_v5 1개, `ai-foundry-m098047` | Qwen 생성 A100 1개·512차원 임베딩·Speech |
+| 4번 검색 | `silvercare-rag-2a5aalbg7ugfc` | Basic·semantic Standard |
 | HTTPS | Caddy·공개 IP·영속 인증서 디스크 | LoadBalancer의 80/443 |
 | 비교 생성 | 각 계정의 `ondam-qwen-4b`, Qwen3.5-4B version 3 | 독립 GlobalManagedCompute, 각 A100 80GB 1개 |
 | 비교 임베딩 | 2번 계정의 `ondam-qwen-embedding`, Qwen3-Embedding-0.6B version 2 | GlobalManagedCompute, A100 80GB 1개 |
@@ -93,13 +119,13 @@ NetworkPolicy는 같은 프로필 내부 통신과 공통 Caddy의 앱 접근, D
 
 공유 Foundry 계정의 전역 정책·다른 프로젝트 학습을 앱 배포에서 수정하지 않는다.
 `GlobalStandard`는 계정 위치와 추론 처리 위치가 같다고 보장하지 않는다.
-비교 모델은 Serverless가 아닌 **Managed-compute 탭**에서 확인한다.
+Qwen 생성·임베딩 모델은 Serverless가 아닌 **Managed-compute 탭**에서 확인한다.
 네 A100 배포는 시간 단위 과금이며 휴대폰급 자원 제한을 적용한 측정 환경이 아니다.
 전용 노드는 label·taint·nodeSelector로 분리한다. HTTPS 진입점·클러스터 기반 시설·ACR,
 질병관리청 외부 API·서비스키·상위 구독/공급자 한도는 공통이다.
 별도 모델 배포·할당량을 Azure 공급자 내부의 전용 물리 서버 보장으로 해석하지 않는다.
 재정렬의 8192-token 문맥과 비절단 처리를 유지하기 위해 32GiB 노드를 사용한다.
-16GiB 노드에서 10GiB 컨테이너 한도로 실행한 전체 문맥 warm-up은 OOM 종료됐다.
+노드 축소 시 전체 문맥·최대 배치의 메모리를 별도 검증하며, 유휴 RSS만으로 용량을 정하지 않는다.
 
 ### 템플릿과 활성 설정
 
